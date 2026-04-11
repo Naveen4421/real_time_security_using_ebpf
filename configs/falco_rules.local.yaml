@@ -1,0 +1,7 @@
+- rule: Read sensitive file untrusted
+  append: true
+  exceptions:
+    - name: gnome_session
+      fields: [proc.pname]
+      values:
+        - [gnome-session-b]# Your custom rules!

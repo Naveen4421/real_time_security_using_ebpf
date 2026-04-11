@@ -1,0 +1,6 @@
+*.log
+*.pid
+*.key
+*.pem
+*.crt
+*.tar.gz
