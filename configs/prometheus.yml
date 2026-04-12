@@ -25,6 +25,8 @@ rule_files:
 # Here it's Prometheus itself.
 scrape_configs:
   - job_name: 'falcosidekick'
+    scrape_interval: 15s
+    honor_timestamps: false
     static_configs:
       - targets: ['localhost:2801']
   # The job name is added as a label `job=<job_name>` to any timeseries scraped from this config.
