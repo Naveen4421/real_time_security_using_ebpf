@@ -2,4 +2,3 @@ listenport: 2801
 
 prometheus:
   enabled: true
-  port: 2802
