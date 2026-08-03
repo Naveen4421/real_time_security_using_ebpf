@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eBPF DevSecOps Security Simulator</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="background-glow"></div>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="logo-area">
+                <span class="logo-icon">🛡️</span>
+                <div>
+                    <h1>eBPF DevSecOps Simulator</h1>
+                    <p class="subtitle">Real-time Linux Kernel Syscall Observability</p>
+                </div>
+            </div>
+            <div class="status-badge" id="backend-status">
+                <span class="status-indicator offline"></span>
+                <span class="status-text">Backend: Disconnected</span>
+            </div>
+        </header>
+
+        <!-- Main Layout -->
+        <main class="main-content">
+            <!-- Left Panel: Threat Simulation Control -->
+            <section class="control-panel glass">
+                <h2>1. Trigger Runtime Threats</h2>
+                <p class="panel-desc">Clicking the buttons below will request the containerized backend to execute anomalous operations. Falco's eBPF probe will intercept these syscalls in the host kernel.</p>
+                
+                <div class="threat-cards">
+                    <!-- Threat 1 -->
+                    <div class="card" id="btn-shell">
+                        <div class="card-icon">🐚</div>
+                        <div class="card-content">
+                            <h3>Spawn Web Shell</h3>
+                            <p>Executes an interactive shell command process inside the pod container.</p>
+                            <span class="falco-rule">Rule: Terminal Spawned inside Web Container</span>
+                        </div>
+                        <div class="card-action">Trigger →</div>
+                    </div>
+
+                    <!-- Threat 2 -->
+                    <div class="card" id="btn-sensitive">
+                        <div class="card-icon">🔑</div>
+                        <div class="card-content">
+                            <h3>Read Sensitive File</h3>
+                            <p>Attempts a system call to read /etc/shadow (root secrets).</p>
+                            <span class="falco-rule">Rule: Read sensitive file untrusted</span>
+                        </div>
+                        <div class="card-action">Trigger →</div>
+                    </div>
+
+                    <!-- Threat 3 -->
+                    <div class="card" id="btn-binary">
+                        <div class="card-icon">📂</div>
+                        <div class="card-content">
+                            <h3>Write to Binary Dir</h3>
+                            <p>Attempts to write a mock payload to the restricted /bin/hack file path.</p>
+                            <span class="falco-rule">Rule: Write below binary dir</span>
+                        </div>
+                        <div class="card-action">Trigger →</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Right Panel: Monitoring Console & logs -->
+            <section class="console-panel glass">
+                <div class="console-header">
+                    <h2>2. Raw API Transaction Log</h2>
+                    <button class="clear-btn" id="btn-clear">Clear</button>
+                </div>
+                <div class="terminal-container">
+                    <div class="terminal-body" id="console-logs">
+                        <div class="log-line system">[SYSTEM] Simulator initialized. Ready to trigger system calls.</div>
+                        <div class="log-line info">[INFO] Connect to backend API endpoint to start...</div>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>Developed for DevSecOps demonstration purposes using Docker, Kubernetes, and eBPF kernel probes.</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

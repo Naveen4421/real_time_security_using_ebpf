@@ -1,0 +1,26 @@
+services:
+  backend:
+    build:
+      context: ./app/backend
+    container_name: security-demo-backend
+    ports:
+      - "5000:5000"
+    networks:
+      - secure-net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./app/frontend
+    container_name: security-demo-frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    networks:
+      - secure-net
+    restart: unless-stopped
+
+networks:
+  secure-net:
+    driver: bridge

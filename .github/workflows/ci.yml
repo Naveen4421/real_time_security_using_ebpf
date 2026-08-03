@@ -1,0 +1,62 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    # Setup Node.js to run test/lint if needed
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 18
+        cache: 'npm'
+        cache-dependency-path: app/backend/package-lock.json
+      continue-on-error: true
+
+    - name: Install Backend Dependencies
+      run: |
+        cd app/backend
+        npm ci || npm install
+      continue-on-error: true
+
+    # Build backend Docker image
+    - name: Build Backend Docker Image
+      run: |
+        docker build -t ebpf-demo-backend:${{ github.sha }} app/backend/
+
+    # Build frontend Docker image
+    - name: Build Frontend Docker Image
+      run: |
+        docker build -t ebpf-demo-frontend:${{ github.sha }} app/frontend/
+
+    # Scan Backend Image for vulnerabilities
+    - name: Run Trivy Vulnerability Scan (Backend)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'ebpf-demo-backend:${{ github.sha }}'
+        format: 'table'
+        exit-code: '0' # Keep 0 for demo so build doesn't block, change to 1 to enforce safety gates
+        ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'CRITICAL,HIGH'
+
+    # Scan Frontend Image for vulnerabilities
+    - name: Run Trivy Vulnerability Scan (Frontend)
+      uses: aquasecurity/trivy-action@master
+      with:
+        image-ref: 'ebpf-demo-frontend:${{ github.sha }}'
+        format: 'table'
+        exit-code: '0'
+        ignore-unfixed: true
+        vuln-type: 'os,library'
+        severity: 'CRITICAL,HIGH'
