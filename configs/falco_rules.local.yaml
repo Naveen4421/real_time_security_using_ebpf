@@ -4,4 +4,26 @@
     - name: gnome_session
       fields: [proc.pname]
       values:
-        - [gnome-session-b]# Your custom rules!
+        - [gnome-session-b]
+
+# Custom Rules for eBPF Security Demo Application
+- rule: Shell Spawned in Security Demo Container
+  desc: Detect shell spawn inside the security demo backend container
+  condition: >
+    spawned_process and
+    container.name = "security-demo-backend"
+  output: >
+    Shell spawned inside security-demo-backend (user=%user.name command=%proc.cmdline container=%container.name)
+  priority: WARNING
+  tags: [container, demo]
+
+- rule: File Open Attempt in Security Demo Container
+  desc: Detect open/write attempts of sensitive paths inside the demo container (succeeded or failed)
+  condition: >
+    evt.type in (open, openat, openat2) and
+    container.name = "security-demo-backend" and
+    (fd.name = "/etc/shadow" or fd.name = "/bin/hack")
+  output: >
+    Sensitive path access attempt in security-demo-backend (user=%user.name file=%fd.name result=%evt.res)
+  priority: CRITICAL
+  tags: [container, demo]
