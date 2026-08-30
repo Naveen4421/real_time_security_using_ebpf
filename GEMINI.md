@@ -51,9 +51,31 @@ The data collection pipeline aggregates events into a sliding window and produce
 
 ---
 
-## 3. Engineering & Contribution Rules
+## 3. Phase 2 Technical Specification
+
+### A. Feature Matrix Vectorization
+All computed window stats must be engineered into a 14-dimensional floating-point array aligned with `FEATURE_KEYS`:
+`[syscall_frequency, unique_syscalls, file_access_rate, unique_files, sensitive_file_access, network_connections, unique_ports, outbound_traffic, process_executions, unique_processes, process_hierarchy_depth, cpu_usage, memory_usage, io_wait]`
+
+### B. Isolation Forest Hyperparameters
+*   `contamination = 0.05`
+*   `n_estimators = 100`
+*   `random_state = 42`
+
+### C. Autoencoder PyTorch Architecture
+*   **Layer 1 (Input):** `Linear(14, 32) -> ReLU`
+*   **Layer 2 (Encoder):** `Linear(32, 16) -> ReLU`
+*   **Layer 3 (Bottleneck):** `Linear(16, 4)`
+*   **Layer 4 (Decoder):** `Linear(4, 16) -> ReLU`
+*   **Layer 5 (Output reconstruction):** `Linear(16, 32) -> ReLU -> Linear(32, 14)`
+*   **Loss Metric:** Mean Squared Error (MSE) reconstruction loss.
+
+---
+
+## 4. Engineering & Contribution Rules
 
 1. **State Preservation:** The sliding windows and telemetry storage must reside under `ml_pipeline/` for Phase 1. Do not use external database dependencies at this stage.
 2. **Kubernetes Interoperability:** Kubernetes queries via `kubectl` must implement dynamic error checking and fall back to safe mocks if running in environment boundaries.
 3. **No-Bypass Policy:** All parsed inputs must be sanitized. Standard exceptions must be caught and logged cleanly.
-4. **Validation:** Always execute the validation test runner (`python3 test_phase1.py`) locally to confirm that code modifications do not break window aggregates.
+4. **Validation:** Always execute local validation test runners (`python3 test_phase1.py` and `python3 test_phase2.py`) to confirm that code modifications do not break aggregates or model outputs.
+5. **Model Storage:** All trained parameters and configurations must be saved inside `ml_pipeline/models/` using PyTorch serialization (`.pth`) and Pickling (`.pkl`).

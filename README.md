@@ -9,7 +9,7 @@ An advanced security architecture combining kernel-level eBPF probes, edge-based
 | Phase | Title | Description | Status |
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | **Data Collection & Observation** | Capture kernel events, enrich metadata, aggregate sliding windows, and stream stats. | **COMPLETED** |
-| **Phase 2** | **ML Training & Model Generation** | Feature engineering and training Isolation Forest / Autoencoder anomaly models. | *Pending* |
+| **Phase 2** | **ML Training & Model Generation** | Feature engineering and training Isolation Forest / Autoencoder anomaly models. | **COMPLETED** |
 | **Phase 3** | **Model Deployment & Inference** | Push models to node edge agents and execute real-time edge/kernel inference. | *Pending* |
 | **Phase 4** | **Anomaly Detection & Policy Gen** | Classify anomaly scores and dynamically generate eBPF C code containment rules. | *Pending* |
 | **Phase 5** | **Code Compilation & Deployment** | Compile dynamic eBPF programs via clang, verify via verifier, and load via bpftool. | *Pending* |
@@ -23,7 +23,9 @@ An advanced security architecture combining kernel-level eBPF probes, edge-based
 
 *   **`ml_pipeline/`**: The Core Python ML security pipeline.
     *   `data_collection.py`: Phase 1 parser, sliding window manager, K8s metadata enricher, and statistics computer.
-    *   `test_phase1.py`: Test runner validating Phase 1 pipeline executions.
+    *   `test_phase1.py` & `demo_phase1.py`: Validation runners for Phase 1.
+    *   `model_training.py`: Phase 2 feature mapping, Isolation Forest and PyTorch Autoencoder training loops.
+    *   `test_phase2.py`: Validation runner to fit, save, and evaluate models.
 *   **`configs/`**: Configuration manifests for local and Kubernetes infrastructure layers.
 *   **`app/`**: Legacy simulator app (vanilla Web UI console and Express server).
 
@@ -44,4 +46,22 @@ To execute and verify the Phase 1 pipeline:
 cd ml_pipeline
 python3 test_phase1.py
 ```
-This generates statistical windows and appends raw telemetry packages directly to `ml_pipeline/cloud_stream.json`.
+
+---
+
+## 🧠 Phase 2: ML Training & Model Generation
+
+### Features Included:
+1. **14-Dimensional Feature Mapping:** Translates collected window streams into structured floats for ML libraries.
+2. **Isolation Forest Outlier Detection:** Fits a forest of estimators to identify structural shifts in host syscall usage.
+3. **Deep Bottleneck Autoencoder:** Implements an encoder/decoder PyTorch neural network to reconstruct normal container usage patterns. Anomaly scoring is based on MSE reconstruction errors.
+4. **Model Serialization:** Auto-saves binary states under `ml_pipeline/models/` for downstream inference deployment.
+5. **Ensemble Aggregation:** Combines multiple ML output probabilities into a single threat metric.
+
+### Verification
+To execute and verify the Phase 2 training engine:
+```bash
+cd ml_pipeline
+python3 test_phase2.py
+```
+This generates synthetic datasets, fits both models, outputs baseline stats, and stores model artifacts.
