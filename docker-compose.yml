@@ -63,6 +63,14 @@ services:
       - loki
     restart: unless-stopped
 
+  ml-agent:
+    build:
+      context: ./ml_pipeline
+    container_name: ml-security-agent
+    networks:
+      - secure-net
+    restart: unless-stopped
+
 networks:
   secure-net:
     driver: bridge
