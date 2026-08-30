@@ -72,10 +72,30 @@ All computed window stats must be engineered into a 14-dimensional floating-poin
 
 ---
 
-## 4. Engineering & Contribution Rules
+## 4. Phase 3 Technical Specification
+
+### A. Edge Deployment Payload
+*   **Deployment package:** Contains pickled Isolation Forest, state dict of PyTorch Autoencoder, and baseline statistical thresholds.
+*   **Edge Loading Interface:** Edge Agent loads weights and builds locally running inference objects.
+
+### B. Anomaly Scoring Fuses
+*   `iforest_weight = 0.5`
+*   `autoencoder_weight = 0.5`
+*   Combined anomaly metric: `(iforest_anomaly_score * 0.5) + (ae_reconstruction_loss * 0.5)`.
+
+### C. Threat Classification Bounds
+Classification rules for container security actions:
+*   `CRITICAL`: Anomaly score is in the 99th percentile of baseline training data or Isolation Forest outlier score > 0.8.
+*   `HIGH`: Anomaly score is in the 95th percentile or Isolation Forest score > 0.65.
+*   `MEDIUM`: Anomaly score is in the 90th percentile or Isolation Forest score > 0.5.
+*   `LOW`: Normal container telemetry.
+
+---
+
+## 5. Engineering & Contribution Rules
 
 1. **State Preservation:** The sliding windows and telemetry storage must reside under `ml_pipeline/` for Phase 1. Do not use external database dependencies at this stage.
 2. **Kubernetes Interoperability:** Kubernetes queries via `kubectl` must implement dynamic error checking and fall back to safe mocks if running in environment boundaries.
 3. **No-Bypass Policy:** All parsed inputs must be sanitized. Standard exceptions must be caught and logged cleanly.
-4. **Validation:** Always execute local validation test runners (`python3 test_phase1.py` and `python3 test_phase2.py`) to confirm that code modifications do not break aggregates or model outputs.
+4. **Validation:** Always execute local validation test runners (`python3 test_phase1.py`, `python3 test_phase2.py`, and `python3 test_phase3.py`) to confirm that code modifications do not break aggregates or model outputs.
 5. **Model Storage:** All trained parameters and configurations must be saved inside `ml_pipeline/models/` using PyTorch serialization (`.pth`) and Pickling (`.pkl`).

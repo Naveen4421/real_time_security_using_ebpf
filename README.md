@@ -10,7 +10,7 @@ An advanced security architecture combining kernel-level eBPF probes, edge-based
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | **Data Collection & Observation** | Capture kernel events, enrich metadata, aggregate sliding windows, and stream stats. | **COMPLETED** |
 | **Phase 2** | **ML Training & Model Generation** | Feature engineering and training Isolation Forest / Autoencoder anomaly models. | **COMPLETED** |
-| **Phase 3** | **Model Deployment & Inference** | Push models to node edge agents and execute real-time edge/kernel inference. | *Pending* |
+| **Phase 3** | **Model Deployment & Inference** | Push models to node edge agents and execute real-time edge/kernel inference. | **COMPLETED** |
 | **Phase 4** | **Anomaly Detection & Policy Gen** | Classify anomaly scores and dynamically generate eBPF C code containment rules. | *Pending* |
 | **Phase 5** | **Code Compilation & Deployment** | Compile dynamic eBPF programs via clang, verify via verifier, and load via bpftool. | *Pending* |
 | **Phase 6** | **Response Execution** | Neutralize threats via pod termination (Talon), process blocks, and alerts. | *Pending* |
@@ -26,6 +26,8 @@ An advanced security architecture combining kernel-level eBPF probes, edge-based
     *   `test_phase1.py` & `demo_phase1.py`: Validation runners for Phase 1.
     *   `model_training.py`: Phase 2 feature mapping, Isolation Forest and PyTorch Autoencoder training loops.
     *   `test_phase2.py`: Validation runner to fit, save, and evaluate models.
+    *   `model_inference.py`: Phase 3 edge deployment and real-time inference processor.
+    *   `test_phase3.py`: Validation runner for model deployment and edge inference.
 *   **`configs/`**: Configuration manifests for local and Kubernetes infrastructure layers.
 *   **`app/`**: Legacy simulator app (vanilla Web UI console and Express server).
 
@@ -64,4 +66,21 @@ To execute and verify the Phase 2 training engine:
 cd ml_pipeline
 python3 test_phase2.py
 ```
-This generates synthetic datasets, fits both models, outputs baseline stats, and stores model artifacts.
+
+---
+
+## ⚡ Phase 3: Model Deployment & Inference
+
+### Features Included:
+1. **Edge Deployment Packaging:** Simulates secure serialization packaging to distribute weights to Kubernetes node edge agents.
+2. **Dynamic Edge Inference:** Integrates Isolation Forest outliers with Autoencoder reconstruction MSE errors to yield an ensemble anomaly decision score.
+3. **Severity Profiling:** Automatically maps continuous scores into severity buckets (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) using baseline statistical metrics.
+4. **Kernel-Level Simulation:** Attaches BPF kprobe handlers to target calls and polls performance buffer score maps.
+
+### Verification
+To execute and verify Phase 3 edge deployment and inference:
+```bash
+cd ml_pipeline
+python3 test_phase3.py
+```
+This deploys the trained models, runs telemetry checks, profiles threats, and starts the kernel polling loop.
