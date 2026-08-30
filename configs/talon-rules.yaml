@@ -1,0 +1,25 @@
+- action: Terminate Pod
+  actionner: kubernetes:terminate
+  parameters:
+    grace_period_seconds: 0
+    ignore_standalone_pods: false
+
+- rule: Shell Spawned Mitigation
+  description: "Terminate the pod if a shell is spawned"
+  match:
+    rules:
+      - Shell Spawned in Security Demo Container
+  actions:
+    - action: Terminate Pod
+  notifiers:
+    - webhook
+
+- rule: File Open Attempt Mitigation
+  description: "Terminate the pod if a sensitive file is opened or written to"
+  match:
+    rules:
+      - File Open Attempt in Security Demo Container
+  actions:
+    - action: Terminate Pod
+  notifiers:
+    - webhook

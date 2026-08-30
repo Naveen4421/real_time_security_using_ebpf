@@ -1,0 +1,23 @@
+customRules:
+  falco_rules.local.yaml: |-
+    # Custom Rules for eBPF Security Demo Application in Kubernetes and Host
+    - rule: Shell Spawned in Security Demo Container
+      desc: Detect shell spawn inside the security demo backend container
+      condition: >
+        spawned_process and
+        container.name in ("security-demo-backend", "backend")
+      output: >
+        Shell spawned inside security-demo-backend (user=%user.name command=%proc.cmdline container=%container.name ns=%k8s.ns.name pod=%k8s.pod.name)
+      priority: WARNING
+      tags: [container, demo]
+
+    - rule: File Open Attempt in Security Demo Container
+      desc: Detect open/write attempts of sensitive paths inside the demo container (succeeded or failed)
+      condition: >
+        evt.type in (open, openat, openat2) and
+        container.name in ("security-demo-backend", "backend") and
+        (fd.name = "/etc/shadow" or fd.name = "/bin/hack")
+      output: >
+        Sensitive path access attempt in security-demo-backend (user=%user.name file=%fd.name result=%evt.res ns=%k8s.ns.name pod=%k8s.pod.name)
+      priority: CRITICAL
+      tags: [container, demo]

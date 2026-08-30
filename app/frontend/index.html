@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>eBPF DevSecOps Security Simulator</title>
+    <title>eBPF DevSecOps Security Console</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
@@ -17,77 +17,137 @@
             <div class="logo-area">
                 <span class="logo-icon">🛡️</span>
                 <div>
-                    <h1>eBPF DevSecOps Simulator</h1>
-                    <p class="subtitle">Real-time Linux Kernel Syscall Observability</p>
+                    <h1>eBPF DevSecOps Security Console</h1>
+                    <p class="subtitle">Multi-Layered Kernel, Cluster & Application-Level Active Response</p>
                 </div>
             </div>
-            <div class="status-badge" id="backend-status">
-                <span class="status-indicator offline"></span>
-                <span class="status-text">Backend: Disconnected</span>
+            <div class="header-badges">
+                <div class="status-badge" id="shield-status">
+                    <span class="status-indicator online"></span>
+                    <span class="status-text">Shield: Active</span>
+                </div>
+                <div class="status-badge" id="backend-status">
+                    <span class="status-indicator offline"></span>
+                    <span class="status-text">Backend: Disconnected</span>
+                </div>
             </div>
         </header>
 
-        <!-- Main Layout -->
-        <main class="main-content">
-            <!-- Left Panel: Threat Simulation Control -->
-            <section class="control-panel glass">
-                <h2>1. Trigger Runtime Threats</h2>
-                <p class="panel-desc">Clicking the buttons below will request the containerized backend to execute anomalous operations. Falco's eBPF probe will intercept these syscalls in the host kernel.</p>
-                
-                <div class="threat-cards">
-                    <!-- Threat 1 -->
-                    <div class="card" id="btn-shell">
-                        <div class="card-icon">🐚</div>
-                        <div class="card-content">
-                            <h3>Spawn Web Shell</h3>
-                            <p>Executes an interactive shell command process inside the pod container.</p>
-                            <span class="falco-rule">Rule: Terminal Spawned inside Web Container</span>
+        <!-- Main Layout Grid -->
+        <main class="main-grid">
+            
+            <!-- Left Side: Simulation & Controls -->
+            <div class="side-panel">
+                <!-- Panel 1: Threat Simulation -->
+                <section class="control-panel glass">
+                    <div class="panel-header">
+                        <h2>1. Trigger Anomalous Operations</h2>
+                        <span class="badge badge-warning">Simulated Attack Vectors</span>
+                    </div>
+                    <p class="panel-desc">Clicking the actions below requests the containerized backend to execute anomalies. These spark OS syscalls intercepted by eBPF.</p>
+                    
+                    <div class="threat-cards">
+                        <!-- Threat 1 -->
+                        <div class="card" id="btn-shell">
+                            <div class="card-icon">🐚</div>
+                            <div class="card-content">
+                                <h3>Spawn Web Shell</h3>
+                                <p>Fires a system shell process inside the backend.</p>
+                                <span class="falco-rule">Rule: Terminal Spawned inside Web Container</span>
+                            </div>
+                            <div class="card-action">Trigger →</div>
                         </div>
-                        <div class="card-action">Trigger →</div>
+
+                        <!-- Threat 2 -->
+                        <div class="card" id="btn-sensitive">
+                            <div class="card-icon">🔑</div>
+                            <div class="card-content">
+                                <h3>Read Sensitive File</h3>
+                                <p>Attempts open() read access on root shadow secrets.</p>
+                                <span class="falco-rule">Rule: Read sensitive file untrusted</span>
+                            </div>
+                            <div class="card-action">Trigger →</div>
+                        </div>
+
+                        <!-- Threat 3 -->
+                        <div class="card" id="btn-binary">
+                            <div class="card-icon">📂</div>
+                            <div class="card-content">
+                                <h3>Write to Binary Dir</h3>
+                                <p>Attempts writing payload to /bin/hack folder.</p>
+                                <span class="falco-rule">Rule: Write below binary dir</span>
+                            </div>
+                            <div class="card-action">Trigger →</div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Panel 2: RASP & Containment Controls -->
+                <section class="rasp-panel glass">
+                    <div class="panel-header">
+                        <h2>2. Application-Level RASP Shield</h2>
+                        <span class="badge badge-purple" id="shield-mode-badge">Status: Monitoring</span>
+                    </div>
+                    <p class="panel-desc">App self-protection detects rapid exploits, entering Lockdown Mode automatically to disable routes and isolate the server.</p>
+                    
+                    <div class="shield-stats">
+                        <div class="stat-card">
+                            <span class="stat-label">Consecutive Threats</span>
+                            <span class="stat-value" id="threat-counter-val">0 / 3</span>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar" id="threat-progress"></div>
+                            </div>
+                        </div>
+                        <div class="stat-card" id="lockdown-timer-card">
+                            <span class="stat-label">Containment Active</span>
+                            <span class="stat-value danger-text" id="lockdown-status-val">INACTIVE</span>
+                            <span class="stat-subtext" id="lockdown-timer-val">System Operating Normally</span>
+                        </div>
                     </div>
 
-                    <!-- Threat 2 -->
-                    <div class="card" id="btn-sensitive">
-                        <div class="card-icon">🔑</div>
-                        <div class="card-content">
-                            <h3>Read Sensitive File</h3>
-                            <p>Attempts a system call to read /etc/shadow (root secrets).</p>
-                            <span class="falco-rule">Rule: Read sensitive file untrusted</span>
-                        </div>
-                        <div class="card-action">Trigger →</div>
+                    <div class="control-actions">
+                        <button class="action-btn btn-danger-outline" id="btn-reset-shield">Reset Console & Lift Containment</button>
                     </div>
+                </section>
+            </div>
 
-                    <!-- Threat 3 -->
-                    <div class="card" id="btn-binary">
-                        <div class="card-icon">📂</div>
-                        <div class="card-content">
-                            <h3>Write to Binary Dir</h3>
-                            <p>Attempts to write a mock payload to the restricted /bin/hack file path.</p>
-                            <span class="falco-rule">Rule: Write below binary dir</span>
+            <!-- Right Side: Incident Feed & Debug Console -->
+            <div class="side-panel">
+                <!-- Panel 3: Live Incident Remediation Feed -->
+                <section class="feed-panel glass">
+                    <div class="panel-header">
+                        <h2>3. Live Incident & Mitigation Feed</h2>
+                        <span class="badge badge-danger">Real-time Responses</span>
+                    </div>
+                    <p class="panel-desc">Aggregated live feed of kernel syscall alerts (Falco), automated remediation actions (Talon), and app containment events (RASP).</p>
+                    
+                    <div class="incidents-container" id="incidents-feed">
+                        <div class="empty-feed-placeholder">
+                            <span class="placeholder-icon">🛡️</span>
+                            <p>No security incidents flagged yet. Trigger threats on the left to activate eBPF probes and active responses.</p>
                         </div>
-                        <div class="card-action">Trigger →</div>
                     </div>
-                </div>
-            </section>
+                </section>
 
-            <!-- Right Panel: Monitoring Console & logs -->
-            <section class="console-panel glass">
-                <div class="console-header">
-                    <h2>2. Raw API Transaction Log</h2>
-                    <button class="clear-btn" id="btn-clear">Clear</button>
-                </div>
-                <div class="terminal-container">
-                    <div class="terminal-body" id="console-logs">
-                        <div class="log-line system">[SYSTEM] Simulator initialized. Ready to trigger system calls.</div>
-                        <div class="log-line info">[INFO] Connect to backend API endpoint to start...</div>
+                <!-- Panel 4: Raw API Log Console -->
+                <section class="console-panel glass">
+                    <div class="console-header">
+                        <h2>4. API Activity Stream</h2>
+                        <button class="clear-btn" id="btn-clear">Clear logs</button>
                     </div>
-                </div>
-            </section>
+                    <div class="terminal-container">
+                        <div class="terminal-body" id="console-logs">
+                            <div class="log-line system">[SYSTEM] Console initialized. Listening for transaction logs...</div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+
         </main>
 
         <!-- Footer -->
         <footer class="footer">
-            <p>Developed for DevSecOps demonstration purposes using Docker, Kubernetes, and eBPF kernel probes.</p>
+            <p>eBPF DevSecOps Security Simulator Platform. Enabled Technologies: Falco modern_ebpf probe, Falco Talon active response, and Node RASP.</p>
         </footer>
     </div>
 

@@ -4,3 +4,15 @@
 *.pem
 *.crt
 *.tar.gz
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Telemetry data output
+ml_pipeline/cloud_stream.json
+
+# Large binaries
+bin/

@@ -2,3 +2,11 @@ listenport: 2801
 
 prometheus:
   enabled: true
+
+talon:
+  address: "http://localhost:2803"
+  checkcert: false
+
+webhook:
+  address: "http://localhost:5000/api/security/events"
+  checkcert: false

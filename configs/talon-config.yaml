@@ -1,0 +1,8 @@
+listenAddress: "0.0.0.0"
+listenPort: 2803
+kubeconfig: "/home/naveen/.kube/config"
+
+notifiers:
+  webhook:
+    url: "http://localhost:5000/api/talon/events"
+    http_method: "POST"
