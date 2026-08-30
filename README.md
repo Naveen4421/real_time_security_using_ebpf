@@ -4,6 +4,11 @@ An advanced security architecture combining kernel-level eBPF probes, edge-based
 
 ---
 
+## 📖 Quick Start & Local Setup
+To run the telemetry agent, docker containers, and validation test runners locally, follow the step-by-step instructions in the [Local Setup Guide](LOCAL_SETUP.md).
+
+---
+
 ## 🚀 8-Phase Security Pipeline Roadmap
 
 | Phase | Title | Description | Status |
