@@ -122,5 +122,67 @@
     "effectiveness_score": 1.0,
     "comments": "Automated validation feedback",
     "verified_at": "2026-09-02T07:49:57.122845Z"
+  },
+  {
+    "incident_id": "inc-1788336195-prod-c",
+    "policy_id": "pol-1788336195-prod-c",
+    "container_id": "prod-container-999",
+    "timestamp": "2026-09-02T08:03:15.881394Z",
+    "anomaly_score": 30055606.3764,
+    "severity": "CRITICAL",
+    "event_window": [
+      {
+        "syscall_frequency": 95.0,
+        "unique_syscalls": 25,
+        "file_access_rate": 60.0,
+        "unique_files": 22,
+        "sensitive_file_access": 18,
+        "network_connections": 40,
+        "unique_ports": 15,
+        "outbound_traffic": 6500000,
+        "process_executions": 42,
+        "unique_processes": 20,
+        "process_hierarchy_depth": 10,
+        "cpu_usage": 99.5,
+        "memory_usage": 95.0,
+        "io_wait": 52.0
+      }
+    ],
+    "status": "VERIFIED",
+    "user_feedback": "TRUE_POSITIVE",
+    "effectiveness_score": 1.0,
+    "comments": "Automated validation feedback",
+    "verified_at": "2026-09-02T08:03:15.882159Z"
+  },
+  {
+    "incident_id": "inc-1788336237-prod-c",
+    "policy_id": "pol-1788336236-prod-c",
+    "container_id": "prod-container-999",
+    "timestamp": "2026-09-02T08:03:57.042370Z",
+    "anomaly_score": 7172113.4157,
+    "severity": "CRITICAL",
+    "event_window": [
+      {
+        "syscall_frequency": 95.0,
+        "unique_syscalls": 25,
+        "file_access_rate": 60.0,
+        "unique_files": 22,
+        "sensitive_file_access": 18,
+        "network_connections": 40,
+        "unique_ports": 15,
+        "outbound_traffic": 6500000,
+        "process_executions": 42,
+        "unique_processes": 20,
+        "process_hierarchy_depth": 10,
+        "cpu_usage": 99.5,
+        "memory_usage": 95.0,
+        "io_wait": 52.0
+      }
+    ],
+    "status": "VERIFIED",
+    "user_feedback": "TRUE_POSITIVE",
+    "effectiveness_score": 1.0,
+    "comments": "Automated validation feedback",
+    "verified_at": "2026-09-02T08:03:57.042998Z"
   }
 ]

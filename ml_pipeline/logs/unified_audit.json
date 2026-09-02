@@ -64,5 +64,53 @@
       "severity": "CRITICAL",
       "policy_id": "pol-1788335648-k8s-po"
     }
+  },
+  {
+    "timestamp": "2026-09-02T08:03:17.002013Z",
+    "event_type": "ANOMALY_EVENT",
+    "service": "ebpf-ml-agent",
+    "metadata": {
+      "container_id": "prod-container-999",
+      "k8s": {
+        "container_id": "prod-container-999",
+        "pod_name": "pod-prod-con",
+        "namespace": "security-demo-ns",
+        "node_name": "worker-node-1",
+        "labels": {
+          "app": "security-demo",
+          "tier": "backend",
+          "environment": "production"
+        },
+        "service_mesh": "istio",
+        "rbac_verified": true
+      },
+      "score": 30055606.3764,
+      "severity": "CRITICAL",
+      "policy_id": "pol-1788336195-prod-c"
+    }
+  },
+  {
+    "timestamp": "2026-09-02T08:03:58.262388Z",
+    "event_type": "ANOMALY_EVENT",
+    "service": "ebpf-ml-agent",
+    "metadata": {
+      "container_id": "prod-container-999",
+      "k8s": {
+        "container_id": "prod-container-999",
+        "pod_name": "pod-prod-con",
+        "namespace": "security-demo-ns",
+        "node_name": "worker-node-1",
+        "labels": {
+          "app": "security-demo",
+          "tier": "backend",
+          "environment": "production"
+        },
+        "service_mesh": "istio",
+        "rbac_verified": true
+      },
+      "score": 7172113.4157,
+      "severity": "CRITICAL",
+      "policy_id": "pol-1788336236-prod-c"
+    }
   }
 ]
