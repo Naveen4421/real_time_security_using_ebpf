@@ -60,5 +60,67 @@
     "effectiveness_score": 1.0,
     "comments": "Automated validation feedback",
     "verified_at": "2026-09-02T07:41:39.078375Z"
+  },
+  {
+    "incident_id": "inc-1788335396-test-f",
+    "policy_id": "pol-1788335396-test-f",
+    "container_id": "test-feedback-container-77",
+    "timestamp": "2026-09-02T07:49:56.116743Z",
+    "anomaly_score": 26081536.408,
+    "severity": "CRITICAL",
+    "event_window": [
+      {
+        "syscall_frequency": 80.0,
+        "unique_syscalls": 22,
+        "file_access_rate": 50.0,
+        "unique_files": 20,
+        "sensitive_file_access": 16,
+        "network_connections": 35,
+        "unique_ports": 12,
+        "outbound_traffic": 5000000,
+        "process_executions": 35,
+        "unique_processes": 18,
+        "process_hierarchy_depth": 9,
+        "cpu_usage": 98.0,
+        "memory_usage": 92.0,
+        "io_wait": 45.0
+      }
+    ],
+    "status": "VERIFIED",
+    "user_feedback": "TRUE_POSITIVE",
+    "effectiveness_score": 1.0,
+    "comments": "Verified unauthorized file write",
+    "verified_at": "2026-09-02T07:49:56.117089Z"
+  },
+  {
+    "incident_id": "inc-1788335397-test-f",
+    "policy_id": "pol-1788335396-test-f",
+    "container_id": "test-feedback-container-77",
+    "timestamp": "2026-09-02T07:49:57.122494Z",
+    "anomaly_score": 26081536.408,
+    "severity": "CRITICAL",
+    "event_window": [
+      {
+        "syscall_frequency": 80.0,
+        "unique_syscalls": 22,
+        "file_access_rate": 50.0,
+        "unique_files": 20,
+        "sensitive_file_access": 16,
+        "network_connections": 35,
+        "unique_ports": 12,
+        "outbound_traffic": 5000000,
+        "process_executions": 35,
+        "unique_processes": 18,
+        "process_hierarchy_depth": 9,
+        "cpu_usage": 98.0,
+        "memory_usage": 92.0,
+        "io_wait": 45.0
+      }
+    ],
+    "status": "VERIFIED",
+    "user_feedback": "TRUE_POSITIVE",
+    "effectiveness_score": 1.0,
+    "comments": "Automated validation feedback",
+    "verified_at": "2026-09-02T07:49:57.122845Z"
   }
 ]
