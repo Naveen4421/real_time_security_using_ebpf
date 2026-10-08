@@ -16,11 +16,20 @@ To run the telemetry agent, docker containers, and validation test runners local
 | **Phase 1** | **Data Collection & Observation** | Capture kernel events, enrich metadata, aggregate sliding windows, and stream stats. | **COMPLETED** |
 | **Phase 2** | **ML Training & Model Generation** | Feature engineering and training Isolation Forest / Autoencoder anomaly models. | **COMPLETED** |
 | **Phase 3** | **Model Deployment & Inference** | Push models to node edge agents and execute real-time edge/kernel inference. | **COMPLETED** |
-| **Phase 4** | **Anomaly Detection & Policy Gen** | Classify anomaly scores and dynamically generate eBPF C code containment rules. | *Pending* |
-| **Phase 5** | **Code Compilation & Deployment** | Compile dynamic eBPF programs via clang, verify via verifier, and load via bpftool. | *Pending* |
-| **Phase 6** | **Response Execution** | Neutralize threats via pod termination (Talon), process blocks, and alerts. | *Pending* |
-| **Phase 7** | **Monitoring & Observability** | Feed metrics to Prometheus dashboards and track latency/accuracy. | *Pending* |
-| **Phase 8** | **Feedback & Self-Improvement** | Collect operator feedback to retrain models and dynamically adjust thresholds. | *Pending* |
+| **Phase 4** | **Anomaly Detection & Policy Gen** | Classify anomaly scores and dynamically generate eBPF C code containment rules. | Prototype |
+| **Phase 5** | **Compilation, Deployment & Response** | Compile dynamic eBPF programs via clang, verify, load, and execute response actions. | Prototype (compile falls back to a mock without clang; verifier and attach are simulated) |
+| **Phase 6** | **Feedback & Self-Improvement** | Collect operator feedback to retrain models and dynamically adjust thresholds. | Prototype (incidents auto-labelled) |
+| **Phase 7** | **Monitoring & Observability** | Feed metrics to Prometheus dashboards and track latency/accuracy. | Prototype (metric values are constants) |
+| **Phase 8** | **Production Hardening** | Input sanitization, circuit breaker, caching, per-tenant quotas. | Prototype |
+
+Phases 1 to 3 run on mock and synthetic data, not live Falco events. Phase numbers follow the
+`ml_pipeline/test_phaseN.py` runners.
+
+## Containment Study (current research work)
+
+The measurement study of automated response mechanisms is described in
+[docs/containment_study_plan.md](docs/containment_study_plan.md). Its experiment harness, with
+setup scripts for a dedicated machine, is in [eval/](eval/README.md).
 
 ---
 

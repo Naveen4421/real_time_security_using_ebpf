@@ -59,7 +59,12 @@ function checkLockdown() {
   return systemLockdown;
 }
 
+// RASP can be disabled (RASP_ENABLED=false) so experiments can measure other
+// response mechanisms without the in-app lockdown interfering.
+const RASP_ENABLED = process.env.RASP_ENABLED !== 'false';
+
 function triggerLockdown(durationMs = 30000) {
+  if (!RASP_ENABLED) return;
   systemLockdown = true;
   lockdownExpiry = Date.now() + durationMs;
   lockdownCounter.inc();
