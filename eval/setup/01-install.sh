@@ -8,10 +8,13 @@ sudo apt-get update
 sudo apt-get install -y docker.io python3 curl
 
 # k3s bundles containerd, kubectl and a NetworkPolicy controller (needed for M2).
-curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s - --write-kubeconfig-mode 644
+# The admin kubeconfig stays root-only (k3s default); a private copy goes to
+# ~/.kube/config so only this user can control the cluster.
+curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s -
 mkdir -p "$HOME/.kube"
-cp /etc/rancher/k3s/k3s.yaml "$HOME/.kube/config"
-chmod 600 "$HOME/.kube/config"
+sudo install -m 600 -o "$(id -u)" -g "$(id -g)" /etc/rancher/k3s/k3s.yaml "$HOME/.kube/config"
+export KUBECONFIG="$HOME/.kube/config"
+grep -q 'KUBECONFIG=' "$HOME/.bashrc" || echo 'export KUBECONFIG="$HOME/.kube/config"' >> "$HOME/.bashrc"
 
 if ! command -v helm >/dev/null 2>&1; then
   curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash

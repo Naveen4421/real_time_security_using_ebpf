@@ -3,6 +3,7 @@
 # Run from the repo root: bash eval/setup/03-install-stack.sh
 set -euo pipefail
 source eval/config.env
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
 
 node_ip=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 collector="http://${node_ip}:${COLLECTOR_PORT}"
