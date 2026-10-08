@@ -16,3 +16,12 @@ ml_pipeline/cloud_stream.json
 
 # Large binaries
 bin/
+
+# Local docker compose overrides
+.env
+
+# Unpublished manuscript and its review: keep out of the public repo
+*.pdf
+
+# Experiment results (copy off the machine or add with -f when final)
+eval/results/

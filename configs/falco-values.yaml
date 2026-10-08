@@ -5,6 +5,7 @@ customRules:
       desc: Detect shell spawn inside the security demo backend container
       condition: >
         spawned_process and
+        proc.name in (shell_binaries) and
         container.name in ("security-demo-backend", "backend")
       output: >
         Shell spawned inside security-demo-backend (user=%user.name command=%proc.cmdline container=%container.name ns=%k8s.ns.name pod=%k8s.pod.name)

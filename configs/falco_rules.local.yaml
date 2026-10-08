@@ -11,6 +11,7 @@
   desc: Detect shell spawn inside the security demo backend container
   condition: >
     spawned_process and
+    proc.name in (shell_binaries) and
     container.name = "security-demo-backend"
   output: >
     Shell spawned inside security-demo-backend (user=%user.name command=%proc.cmdline container=%container.name)

@@ -1,0 +1,15 @@
+{
+  "description": "Interactive access via kubectl exec, then discovery and sensitive-path steps. Benign lab commands only; output is discarded. Each completed step sends a beacon to the collector.",
+  "type": "exec",
+  "interval_s": 1.0,
+  "steps": [
+    "id",
+    "cat /etc/passwd",
+    "ls /var/run/secrets/kubernetes.io/serviceaccount",
+    "cat /etc/shadow",
+    "echo test > /bin/hack",
+    "uname -a",
+    "ls /app",
+    "cat /proc/self/status"
+  ]
+}

@@ -1,0 +1,9 @@
+# Helm values for the falco-talon chart. The webhook URL and rules are set by
+# setup/03-install-stack.sh and harness/run.py.
+replicaCount: 1
+image:
+  pullPolicy: IfNotPresent
+config:
+  defaultNotifiers:
+    - k8sevents
+    - webhook
