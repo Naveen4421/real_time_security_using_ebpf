@@ -1,0 +1,54 @@
+# Eval workload: the demo backend, 2 replicas, applied into namespace "eval".
+# __RASP__ is replaced by the harness (true for M5, false otherwise).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  labels:
+    app: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      containers:
+      - name: backend
+        image: ebpf-demo-backend:eval
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 5000
+        env:
+        - name: RASP_ENABLED
+          value: "__RASP__"
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 5000
+          periodSeconds: 1
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 10001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+spec:
+  selector:
+    app: backend
+  ports:
+  - port: 5000
+    targetPort: 5000

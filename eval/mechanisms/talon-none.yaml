@@ -1,0 +1,10 @@
+# M0 and M5: Talon is running but no rule matches any Falco alert, so it never acts.
+- action: Terminate Pod
+  actionner: kubernetes:terminate
+
+- rule: Never matches
+  match:
+    rules:
+      - __no_such_falco_rule__
+  actions:
+    - action: Terminate Pod

@@ -1,0 +1,4 @@
+{
+  "description": "Normal traffic only, no attack steps. Measures false positives (plan T1).",
+  "type": "none"
+}

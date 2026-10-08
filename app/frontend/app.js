@@ -1,5 +1,7 @@
-// Detect backend API endpoint based on host
-const API_BASE = window.location.port === '3000' || window.location.port === '8080'
+// Detect backend API endpoint based on host.
+// When served by the nginx container, /api and /health are proxied to the backend,
+// so same-origin works regardless of which host port is published.
+const API_BASE = window.location.port === '3000'
     ? 'http://localhost:5000'
     : window.location.origin;
 

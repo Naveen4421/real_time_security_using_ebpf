@@ -1,0 +1,6 @@
+{
+  "description": "The app's own /api/threat/* endpoints called over HTTP against the target pod. The only scenario RASP (M5) can react to. A step counts as completed on HTTP 200.",
+  "type": "http",
+  "interval_s": 1.0,
+  "steps": ["spawn-shell", "read-sensitive", "write-binary", "spawn-shell", "read-sensitive", "write-binary", "spawn-shell", "read-sensitive"]
+}

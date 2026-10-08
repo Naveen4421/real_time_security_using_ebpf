@@ -1,0 +1,13 @@
+# M2: create a NetworkPolicy that blocks all egress for the pod's Deployment.
+# Note: Talon selects pods by the owner's selector, so every replica is isolated,
+# and only egress is blocked (ingress, i.e. benign traffic, still reaches the pods).
+- action: Isolate Pod Egress
+  actionner: kubernetes:networkpolicy
+
+- rule: Isolate on eval detections
+  match:
+    rules:
+      - Shell Spawned in Eval Backend
+      - Sensitive Path Open in Eval Backend
+  actions:
+    - action: Isolate Pod Egress
