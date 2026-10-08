@@ -1,0 +1,13 @@
+# M1: delete the offending pod immediately; its Deployment recreates it.
+- action: Terminate Pod
+  actionner: kubernetes:terminate
+  parameters:
+    grace_period_seconds: 0
+
+- rule: Terminate on eval detections
+  match:
+    rules:
+      - Shell Spawned in Eval Backend
+      - Sensitive Path Open in Eval Backend
+  actions:
+    - action: Terminate Pod

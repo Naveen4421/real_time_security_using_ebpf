@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Builds the backend image and imports it into k3s's containerd.
+# Run from the repo root after every backend code change: bash eval/setup/02-build-images.sh
+set -euo pipefail
+tmp=$(mktemp --suffix=.tar)
+trap 'rm -f "$tmp"' EXIT
+sudo docker build -t ebpf-demo-backend:eval app/backend
+sudo docker save ebpf-demo-backend:eval -o "$tmp"
+sudo k3s ctr images import "$tmp"
+sudo k3s ctr images ls | grep ebpf-demo-backend
