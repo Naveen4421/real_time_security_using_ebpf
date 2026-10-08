@@ -107,6 +107,25 @@ eval/results/<session>/
 - Talon de-duplicates identical events within 5 s by default (`config.deduplication`); this is left
   at the chart default and should be stated in the paper.
 
+## Risks and cleanup
+
+- Falco runs privileged and sees every process on the PC, including other users' commands. Its alert
+  logs stay on the PC; clear them by uninstalling (below).
+- k3s changes iptables and adds network interfaces (flannel, cni0). This can disturb Docker
+  networking or a VPN until k3s is removed.
+- The collector (port 9999) has no authentication. Anyone on the LAN could send fake events into a
+  results session. Restrict it with the firewall if the lab network is shared.
+- Setup downloads and runs install scripts and images from the internet as root (k3s, Helm, Falco
+  charts). Versions are recorded per session in `session.json`.
+
+Remove everything when finished:
+
+```bash
+helm uninstall falco falco-talon -n falco
+/usr/local/bin/k3s-uninstall.sh      # removes k3s, its containers, iptables rules and interfaces
+rm -f ~/.kube/config
+```
+
 ## Troubleshooting
 
 | Symptom | Fix |

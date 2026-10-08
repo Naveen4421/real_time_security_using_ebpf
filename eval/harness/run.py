@@ -26,6 +26,7 @@ import urllib.request
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 EVAL = os.path.join(ROOT, "eval")
 NS = "eval"
+os.environ.setdefault("KUBECONFIG", os.path.expanduser("~/.kube/config"))
 
 MECHANISMS = {
     "m0": {"talon_rules": "talon-none.yaml", "rasp": False, "desc": "detect only"},
