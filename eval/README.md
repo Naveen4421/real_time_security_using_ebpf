@@ -35,10 +35,11 @@ Requirements: Ubuntu 22.04 or 24.04, 4+ CPUs, 8+ GB RAM, 30+ GB free disk, sudo,
 git clone -b containment-eval https://github.com/Naveen4421/real_time_security_using_ebpf.git
 cd real_time_security_using_ebpf
 
-bash eval/setup/00-preflight.sh       # checks hardware, kernel, and that the machine is dedicated
-bash eval/setup/01-install.sh         # Docker, k3s, Helm (about 5 min)
-bash eval/setup/02-build-images.sh    # builds the backend image and loads it into k3s
-bash eval/setup/03-install-stack.sh   # Falco + Falcosidekick + Talon, wired to the collector
+# Each step runs only if the previous one succeeded
+bash eval/setup/00-preflight.sh &&      # checks hardware, kernel, and that the machine is dedicated
+bash eval/setup/01-install.sh &&        # Docker (if missing), k3s, Helm (about 5 min)
+bash eval/setup/02-build-images.sh &&   # builds the backend image and loads it into k3s
+bash eval/setup/03-install-stack.sh     # Falco + Falcosidekick + Talon, wired to the collector
 ```
 
 ### 1. Smoke test (about 5 minutes)

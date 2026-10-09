@@ -4,11 +4,17 @@
 set -euo pipefail
 source eval/config.env
 
-sudo apt-get update
-sudo apt-get install -y python3 curl
-# Keep an existing Docker install (apt docker-ce or snap); installing docker.io
-# on top of docker-ce causes package conflicts.
-command -v docker >/dev/null 2>&1 || sudo apt-get install -y docker.io
+# Install only what is missing. An existing Docker (apt docker-ce or snap) is
+# kept: installing docker.io on top of docker-ce causes package conflicts.
+need=()
+command -v python3 >/dev/null 2>&1 || need+=(python3)
+command -v curl >/dev/null 2>&1 || need+=(curl)
+command -v docker >/dev/null 2>&1 || need+=(docker.io)
+if [ ${#need[@]} -gt 0 ]; then
+  # A broken third-party apt source on the machine must not stop the setup.
+  sudo apt-get update || echo "WARN: apt-get update reported errors; continuing"
+  sudo apt-get install -y "${need[@]}"
+fi
 
 # k3s bundles containerd, kubectl and a NetworkPolicy controller (needed for M2).
 # The admin kubeconfig stays root-only (k3s default); a private copy goes to

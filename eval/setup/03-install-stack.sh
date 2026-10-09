@@ -4,6 +4,7 @@
 set -euo pipefail
 source eval/config.env
 export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+command -v kubectl >/dev/null 2>&1 || { echo "kubectl not found: run eval/setup/01-install.sh first"; exit 1; }
 
 node_ip=$(kubectl get node -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 collector="http://${node_ip}:${COLLECTOR_PORT}"
