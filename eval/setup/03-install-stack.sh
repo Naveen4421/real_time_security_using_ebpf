@@ -13,8 +13,27 @@ echo "Collector URL (must be reachable from pods): $collector"
 helm repo add falcosecurity https://falcosecurity.github.io/charts >/dev/null 2>&1 || true
 helm repo update
 
-helm upgrade --install falco-talon falcosecurity/falco-talon -n falco --create-namespace \
-  ${TALON_CHART_VERSION:+--version "$TALON_CHART_VERSION"} \
+# Download each chart once (with retries, for slow networks) into eval/stack/charts/.
+# The harness reuses these files, so every run uses exactly the same chart version.
+charts=eval/stack/charts
+mkdir -p "$charts"
+pull() {  # pull <chart> <version-or-empty> <glob>
+  ls $charts/$3 >/dev/null 2>&1 && return 0
+  for i in 1 2 3 4 5; do
+    helm pull "falcosecurity/$1" ${2:+--version "$2"} -d "$charts" && return 0
+    echo "Download of $1 failed (attempt $i/5), retrying in 10 s..."
+    sleep 10
+  done
+  echo "Could not download chart $1. Check the internet connection and re-run this script."
+  exit 1
+}
+pull falco-talon "$TALON_CHART_VERSION" 'falco-talon-*.tgz'
+pull falco "$FALCO_CHART_VERSION" 'falco-[0-9]*.tgz'
+talon_chart=$(ls $charts/falco-talon-*.tgz | head -1)
+falco_chart=$(ls $charts/falco-[0-9]*.tgz | head -1)
+echo "Charts: $talon_chart $falco_chart"
+
+helm upgrade --install falco-talon "$talon_chart" -n falco --create-namespace \
   -f eval/stack/talon-values.yaml \
   --set config.notifiers.webhook.url="${collector}/talon" \
   --set-file config.rulesOverride=eval/mechanisms/talon-none.yaml \
@@ -24,8 +43,7 @@ talon_svc=$(kubectl get svc -n falco -o name | grep talon | head -1 | cut -d/ -f
 [ -n "$talon_svc" ] || { echo "Talon service not found"; exit 1; }
 echo "Talon service: $talon_svc"
 
-helm upgrade --install falco falcosecurity/falco -n falco \
-  ${FALCO_CHART_VERSION:+--version "$FALCO_CHART_VERSION"} \
+helm upgrade --install falco "$falco_chart" -n falco \
   -f eval/stack/falco-values.yaml \
   --set falcosidekick.config.webhook.address="${collector}/falco" \
   --set falcosidekick.config.talon.address="http://${talon_svc}.falco.svc:2803" \

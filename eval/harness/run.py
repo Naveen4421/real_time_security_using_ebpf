@@ -12,6 +12,7 @@ Run from the repo root, e.g.:
   python3 eval/harness/run.py --mechanisms m0,m1,m2,m5 --scenarios s1-exec-discovery --runs 20
 """
 import argparse
+import glob
 import json
 import os
 import random
@@ -70,9 +71,17 @@ def talon_deployment():
     return names[0]
 
 
+def talon_chart():
+    """Local chart file downloaded by setup/03-install-stack.sh (no network needed)."""
+    charts = sorted(glob.glob(os.path.join(EVAL, "stack", "charts", "falco-talon-*.tgz")))
+    if not charts:
+        raise RuntimeError("Talon chart not found in eval/stack/charts; run eval/setup/03-install-stack.sh")
+    return charts[-1]
+
+
 def apply_mechanism(mech):
     rules = os.path.join(EVAL, "mechanisms", MECHANISMS[mech]["talon_rules"])
-    sh(f"helm upgrade falco-talon falcosecurity/falco-talon -n falco --reuse-values "
+    sh(f"helm upgrade falco-talon {shlex.quote(talon_chart())} -n falco --reuse-values "
        f"--set-file config.rulesOverride={shlex.quote(rules)}", timeout=600)
     deploy = talon_deployment()
     sh(f"kubectl rollout restart -n falco {deploy}")
