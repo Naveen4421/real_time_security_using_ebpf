@@ -16,8 +16,14 @@ echo "Active LSMs: $(cat /sys/kernel/security/lsm 2>/dev/null)"
 if command -v docker >/dev/null 2>&1; then
   others=$(sudo docker ps -q 2>/dev/null | wc -l)
   if [ "$others" -gt 0 ]; then
-    echo "FAIL: $others Docker containers are already running. Use a dedicated machine for experiments."
-    fail=1
+    sudo docker ps --format '  running: {{.Names}} ({{.Image}})'
+    if [ "${ALLOW_RUNNING_CONTAINERS:-0}" = "1" ]; then
+      echo "WARN: $others Docker containers running (allowed). Record this as a limitation."
+    else
+      echo "FAIL: $others Docker containers are already running. Stop them, or if they are idle and"
+      echo "      must stay, re-run with ALLOW_RUNNING_CONTAINERS=1."
+      fail=1
+    fi
   fi
 fi
 [ $fail -eq 0 ] && echo "Preflight OK" || { echo "Preflight FAILED"; exit 1; }
