@@ -14,7 +14,9 @@ curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION="$K3S_VERSION" sh -s -
 mkdir -p "$HOME/.kube"
 sudo install -m 600 -o "$(id -u)" -g "$(id -g)" /etc/rancher/k3s/k3s.yaml "$HOME/.kube/config"
 export KUBECONFIG="$HOME/.kube/config"
-grep -q 'KUBECONFIG=' "$HOME/.bashrc" || echo 'export KUBECONFIG="$HOME/.kube/config"' >> "$HOME/.bashrc"
+for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+  [ -f "$rc" ] && { grep -q 'KUBECONFIG=' "$rc" || echo 'export KUBECONFIG="$HOME/.kube/config"' >> "$rc"; }
+done
 
 if ! command -v helm >/dev/null 2>&1; then
   curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
