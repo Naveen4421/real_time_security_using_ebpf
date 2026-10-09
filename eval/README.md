@@ -98,10 +98,17 @@ eval/results/<session>/
 
 - `L_detect_s`: attack start to the first Falco alert reaching the collector.
 - `alert_pipeline_s`: Falco's kernel event time to collector receive time.
-- `L_response_s`: attack start to the response being visible (pod marked for deletion, NetworkPolicy
-  present, or first 403 from RASP). Watcher resolution is about 0.25 to 0.5 s.
-- `steps_completed`: attack steps whose beacon reached the collector. Under `m2` a missing beacon
-  means the step's outbound traffic was blocked, which is what network isolation is meant to do.
+- `L_detect_s`: for `s1` this includes `kubectl exec` start-up (about 0.09 s); report
+  `alert_pipeline_s` (kernel event to alert, about 1 to 2 ms) as Falco's detection latency.
+- `L_response_s`: attack start to the response action completing: Talon's notification for `m1`/`m2`
+  (millisecond precision, collector clock), first HTTP 403 for `m5`.
+- `L_api_visible_s`: attack start to the watcher seeing the change in the Kubernetes API (upper
+  bound, about 0.3 s resolution). The pod being gone from the API does not mean its processes have
+  stopped; use `attack_window_s` and `steps_completed` for what the attacker could still do.
+- `steps_completed`: exec steps whose beacon reached the collector, or HTTP steps not blocked (status
+  other than 403 or no response; `spawn-shell` returns 500 because `whoami` fails for UID 10001, but
+  the shell did start). Under `m2` a missing beacon means the step's outbound traffic was blocked,
+  which is what network isolation is meant to do.
 - `recompromised`: after the observation window, the first attack step is tried again against a
   live backend pod.
 - `target_logs_available`: whether the original pod's logs can still be read after the response.

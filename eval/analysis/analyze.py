@@ -88,7 +88,8 @@ def analyze_run(meta, events, run_dir):
     # Attack progress
     total = scenario_steps(meta["scenario"])
     if "http_steps" in meta:
-        done = [s for s in meta["http_steps"] if s["status"] == 200]
+        # Completed = reached the app and not blocked (see harness http_step_ran).
+        done = [s for s in meta["http_steps"] if s["status"] not in (0, 403)]
         times = [s["t"] for s in done]
         first_t = meta["http_steps"][0]["t"] if meta["http_steps"] else None
         blocked = [s for s in meta["http_steps"] if s["status"] == 403]
@@ -102,20 +103,25 @@ def analyze_run(meta, events, run_dir):
         recheck = [e for e in events if e["type"] == "beacon" and e.get("run") == f"{run}-recheck" and e["step"] == "1"]
         if "recheck_run" in meta:
             row["recompromised"] = bool(recheck)
-    if "recheck_ok" in meta:
-        row["recompromised"] = meta["recheck_ok"]
+    if "recheck_http" in meta:
+        row["recompromised"] = meta["recheck_http"]["status"] not in (0, 403)
     row["steps_completed"] = len(times)
     row["steps_total"] = total
     if times and first_t is not None:
         row["attack_window_s"] = max(times) - first_t
 
-    # Response timing from the pod/NetworkPolicy watcher
+    # Response timing. Primary: Talon's own completion notification (collector clock,
+    # ms precision) for m1/m2, first 403 for m5. Secondary: when the watcher saw the
+    # change in the Kubernetes API (upper bound, ~0.3 s resolution).
     tl = meta.get("timeline") or {}
-    resp = tl.get("target_deleting") or tl.get("target_gone") or tl.get("netpol_seen")
-    if meta["mechanism"] == "m5" and "t_rasp_block_s" in row:
-        row["L_response_s"] = row["t_rasp_block_s"]
-    elif resp:
-        row["L_response_s"] = resp - t_action
+    api_seen = tl.get("target_deleting") or tl.get("target_gone") or tl.get("netpol_seen")
+    if api_seen:
+        row["L_api_visible_s"] = api_seen - t_action
+    if meta["mechanism"] == "m5":
+        if "t_rasp_block_s" in row:
+            row["L_response_s"] = row["t_rasp_block_s"]
+    elif actions:
+        row["L_response_s"] = actions[0]["t"] - t_action
     if tl.get("new_pod_ready"):
         row["recovery_s"] = tl["new_pod_ready"] - t_action
     row["target_logs_available"] = meta.get("target_logs_available")
@@ -140,7 +146,7 @@ def summarize(rows):
     out = []
     for (mech, scen), rs in sorted(groups.items()):
         s = {"mechanism": mech, "scenario": scen, "n": len(rs)}
-        for key in ("L_detect_s", "L_response_s", "attack_window_s", "steps_completed", "alert_pipeline_s",
+        for key in ("L_detect_s", "L_response_s", "L_api_visible_s", "attack_window_s", "steps_completed", "alert_pipeline_s",
                     "err_rate_response", "p99_ms_response"):
             vals = [r[key] for r in rs if r.get(key) is not None]
             if vals:

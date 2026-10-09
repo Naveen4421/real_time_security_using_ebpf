@@ -123,12 +123,14 @@ class Watcher(threading.Thread):
         known_pods = None
         with open(self.out_path, "w") as log:
             while not self.stop_event.is_set():
-                t = time.time()
                 try:
                     items = kubectl_json(f"get pods,networkpolicies -n {NS}")["items"]
                 except Exception:
                     time.sleep(self.interval)
                     continue
+                # Stamp after the query returns: the observed state held by then,
+                # so timeline values are upper bounds (resolution ~ one query, ~0.3 s).
+                t = time.time()
                 pods = [i for i in items if i["kind"] == "Pod"]
                 pols = [i for i in items if i["kind"] == "NetworkPolicy"]
                 names = {p["metadata"]["name"] for p in pods}
@@ -194,6 +196,12 @@ def http_step(ip, endpoint, timeout=3):
     return {"t": t, "endpoint": endpoint, "status": status}
 
 
+def http_step_ran(status):
+    """The step reached the app and was not blocked. 403 = RASP lockdown, 0 = no response.
+    500 counts as ran: e.g. spawn-shell starts a shell, then `whoami` fails for UID 10001."""
+    return status not in (0, 403)
+
+
 def run_http_scenario(scenario, pod_ip):
     results = []
     for ep in scenario["steps"]:
@@ -225,7 +233,7 @@ def recompromise_probe(scenario, run_id, collector):
         return {"recheck_pod": pod["metadata"]["name"], "recheck_run": f"{run_id}-recheck"}
     if scenario["type"] == "http":
         res = http_step(pod["status"]["podIP"], scenario["steps"][0])
-        return {"recheck_pod": pod["metadata"]["name"], "recheck_ok": res["status"] == 200, "recheck_http": res}
+        return {"recheck_pod": pod["metadata"]["name"], "recheck_ok": http_step_ran(res["status"]), "recheck_http": res}
     return {}
 
 
