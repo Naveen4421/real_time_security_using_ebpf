@@ -15,6 +15,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 EVAL = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(EVAL, "harness"))
+from run import http_step_ran  # noqa: E402  (one definition of a completed HTTP step)
 
 
 def parse_falco_time(s):
@@ -65,6 +67,71 @@ def scenario_steps(name):
     return None
 
 
+BLOCKED_RC = {"126", "127", "137"}  # could not execute / not found / killed (SIGKILL)
+
+
+def read_jsonl(path):
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [json.loads(line) for line in f if line.strip().startswith("{")]
+
+
+def tetragon_metrics(run_dir, meta, t_action):
+    """Exact kernel-side times from Tetragon (only when tetragon.jsonl was saved):
+    L_kernel_kill_s  first process killed by the M3 policy
+    L_session_end_s  exit of the attacker's shell (exec scenario), or its kill at start
+    L_app_killed_s   first exit of the target pod's node server.js (HTTP scenario)"""
+    evs = read_jsonl(os.path.join(run_dir, "tetragon.jsonl"))
+    if not evs:
+        return {}
+    t_end = t_action + meta.get("observe_s", 120)  # the re-compromise probe comes later
+    out = {}
+    kills, execs, exits = [], [], []
+    for e in evs:
+        t = parse_falco_time(e.get("time"))
+        if t is None or not (t_action <= t <= t_end):
+            continue
+        kind = next((k for k in e if k.startswith("process_")), None)
+        body = e[kind]
+        proc = body.get("process", {})
+        pod = (proc.get("pod") or {}).get("name")
+        if kind == "process_kprobe" and body.get("action") == "KPROBE_ACTION_SIGKILL":
+            kills.append(t)
+        elif kind == "process_exec" and pod == meta.get("target_pod"):
+            execs.append((t, proc))
+        elif kind == "process_exit" and pod == meta.get("target_pod"):
+            exits.append((t, proc))
+    if kills:
+        out["L_kernel_kill_s"] = min(kills) - t_action
+    if meta.get("http_steps") is None:
+        session = next((p for t, p in sorted(execs, key=lambda x: x[0]) if p.get("arguments") == "-s"), None)
+        if session:
+            end = [t for t, p in exits if p.get("exec_id") == session.get("exec_id")]
+            if end:
+                out["L_session_end_s"] = min(end) - t_action
+        elif kills:
+            out["L_session_end_s"] = min(kills) - t_action
+    else:
+        # The server is the container's PID 1; spawn-shell forks node children that M3 also kills.
+        app = [t for t, p in exits if p.get("binary", "").endswith("/node")
+               and ((p.get("pod") or {}).get("container") or {}).get("pid") == 1]
+        if app:
+            out["L_app_killed_s"] = min(app) - t_action
+    return out
+
+
+def kubearmor_metrics(run_dir, t_action):
+    """First KubeArmor block alert for the M4 policy (only when kubearmor.jsonl was saved)."""
+    alerts = [a for a in read_jsonl(os.path.join(run_dir, "kubearmor.jsonl"))
+              if a.get("PolicyName") == "eval-m4-block"]
+    times = [t for t in (parse_falco_time(a.get("UpdatedTime")) for a in alerts) if t and t >= t_action]
+    out = {"block_alerts": len(times)} if alerts else {}
+    if times:
+        out["L_block_alert_s"] = min(times) - t_action
+    return out
+
+
 def analyze_run(meta, events, run_dir):
     run = meta["run"]
     t_action = meta.get("t_action")
@@ -73,9 +140,11 @@ def analyze_run(meta, events, run_dir):
         row["error"] = meta.get("error")
         return row
 
-    mine = [e for e in events if e.get("run") == run]
-    alerts = sorted((e for e in mine if e["type"] == "alert" and e["t"] >= t_action), key=lambda e: e["t"])
-    actions = sorted((e for e in mine if e["type"] == "action" and e["t"] >= t_action), key=lambda e: e["t"])
+    # Only the observation window: the re-compromise probe afterwards raises its own alerts.
+    t_end = t_action + meta.get("observe_s", 120)
+    mine = [e for e in events if e.get("run") == run and t_action <= e["t"] <= t_end]
+    alerts = sorted((e for e in mine if e["type"] == "alert"), key=lambda e: e["t"])
+    actions = sorted((e for e in mine if e["type"] == "action"), key=lambda e: e["t"])
     row["alerts"] = len(alerts)
     if alerts:
         row["L_detect_s"] = alerts[0]["t"] - t_action
@@ -89,26 +158,41 @@ def analyze_run(meta, events, run_dir):
     total = scenario_steps(meta["scenario"])
     if "http_steps" in meta:
         # Completed = reached the app and not blocked (see harness http_step_ran).
-        done = [s for s in meta["http_steps"] if s["status"] not in (0, 403)]
+        done = [s for s in meta["http_steps"] if http_step_ran(s["status"], s.get("body"))]
         times = [s["t"] for s in done]
         first_t = meta["http_steps"][0]["t"] if meta["http_steps"] else None
         blocked = [s for s in meta["http_steps"] if s["status"] == 403]
         if blocked:
             row["t_rasp_block_s"] = blocked[0]["t"] - t_action
+        refused = [s["t"] for s in meta["http_steps"] if not http_step_ran(s["status"], s.get("body"))]
+        if refused and "body" in meta["http_steps"][0]:
+            row["L_first_blocked_s"] = min(refused) - t_action
+        reached_times = times
     else:
+        # A beacon = the attacker's shell was alive after the step. The step itself took
+        # effect unless its exit code says it was killed or could not run (M3/M4).
         beacons = [e for e in events if e["type"] == "beacon" and e.get("run") == run]
         first_t = min((e["t"] for e in beacons if e["step"] == "0"), default=None)
-        done = {e["step"]: e["t"] for e in beacons if e["step"] not in (None, "0")}
-        times = list(done.values())
-        recheck = [e for e in events if e["type"] == "beacon" and e.get("run") == f"{run}-recheck" and e["step"] == "1"]
+        reached = {e["step"]: e for e in beacons if e["step"] not in (None, "0")}
+        reached_times = [e["t"] for e in reached.values()]
+        times = [e["t"] for e in reached.values() if e.get("rc") not in BLOCKED_RC]
+        row["steps_reached"] = len(reached)
+        refused = [e["t"] for e in reached.values() if e.get("rc") in BLOCKED_RC]
+        if refused:
+            row["L_first_blocked_s"] = min(refused) - t_action
+        recheck = [e for e in events if e["type"] == "beacon" and e.get("run") == f"{run}-recheck"
+                   and e["step"] == "1" and e.get("rc") not in BLOCKED_RC]
         if "recheck_run" in meta:
             row["recompromised"] = bool(recheck)
     if "recheck_http" in meta:
-        row["recompromised"] = meta["recheck_http"]["status"] not in (0, 403)
+        row["recompromised"] = http_step_ran(meta["recheck_http"]["status"], meta["recheck_http"].get("body"))
     row["steps_completed"] = len(times)
     row["steps_total"] = total
-    if times and first_t is not None:
-        row["attack_window_s"] = max(times) - first_t
+    if reached_times and first_t is not None:
+        row["attack_window_s"] = max(reached_times) - first_t
+
+    row.update(tetragon_metrics(run_dir, meta, t_action))
+    row.update(kubearmor_metrics(run_dir, t_action))
 
     # Response timing. Primary: Talon's own completion notification (collector clock,
     # ms precision) for m1/m2, first 403 for m5. Secondary: when the watcher saw the
@@ -120,6 +204,15 @@ def analyze_run(meta, events, run_dir):
     if meta["mechanism"] == "m5":
         if "t_rasp_block_s" in row:
             row["L_response_s"] = row["t_rasp_block_s"]
+    elif meta["mechanism"] == "m3":
+        if "L_kernel_kill_s" in row:
+            row["L_response_s"] = row["L_kernel_kill_s"]
+    elif meta["mechanism"] == "m4":
+        # KubeArmor raises no alert when it refuses /bin/busybox started as /bin/sh, so the
+        # first refused step counts too (an upper bound: the step's report time).
+        cands = [row[k] for k in ("L_block_alert_s", "L_first_blocked_s") if k in row]
+        if cands:
+            row["L_response_s"] = min(cands)
     elif actions:
         row["L_response_s"] = actions[0]["t"] - t_action
     if tl.get("new_pod_ready"):
@@ -146,8 +239,9 @@ def summarize(rows):
     out = []
     for (mech, scen), rs in sorted(groups.items()):
         s = {"mechanism": mech, "scenario": scen, "n": len(rs)}
-        for key in ("L_detect_s", "L_response_s", "L_api_visible_s", "attack_window_s", "steps_completed", "alert_pipeline_s",
-                    "err_rate_response", "p99_ms_response"):
+        for key in ("L_detect_s", "L_response_s", "L_api_visible_s", "attack_window_s", "steps_completed",
+                    "steps_reached", "L_session_end_s", "L_kernel_kill_s", "L_app_killed_s", "L_block_alert_s", "L_first_blocked_s",
+                    "alert_pipeline_s", "err_rate_response", "p99_ms_response", "recovery_s"):
             vals = [r[key] for r in rs if r.get(key) is not None]
             if vals:
                 lo, hi = bootstrap_ci(vals)

@@ -1,0 +1,65 @@
+# M3: Tetragon kills, in the kernel, the process that does what the two Falco eval rules
+# detect: a shell starting in the backend, or an open of /etc/shadow or /bin/hack.
+# Same detection logic as M1/M2; only the enforcement point differs. Applied to
+# namespace "eval" by the harness before the pods start.
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicyNamespaced
+metadata:
+  name: eval-m3-kill
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  kprobes:
+  - call: "sys_execve"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Postfix"
+        values: ["/sh", "/ash", "/bash", "/dash", "/zsh", "/ksh", "/csh", "/tcsh"]
+      matchActions:
+      - action: Sigkill
+  - call: "sys_open"
+    syscall: true
+    args:
+    - index: 0
+      type: "string"
+    selectors:
+    - matchArgs:
+      - index: 0
+        operator: "Equal"
+        values: ["/etc/shadow", "/bin/hack"]
+      matchActions:
+      - action: Sigkill
+  - call: "sys_openat"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    - index: 1
+      type: "string"
+    selectors:
+    - matchArgs:
+      - index: 1
+        operator: "Equal"
+        values: ["/etc/shadow", "/bin/hack"]
+      matchActions:
+      - action: Sigkill
+  - call: "sys_openat2"
+    syscall: true
+    args:
+    - index: 0
+      type: "int"
+    - index: 1
+      type: "string"
+    selectors:
+    - matchArgs:
+      - index: 1
+        operator: "Equal"
+        values: ["/etc/shadow", "/bin/hack"]
+      matchActions:
+      - action: Sigkill
