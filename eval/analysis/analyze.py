@@ -132,6 +132,42 @@ def kubearmor_metrics(run_dir, t_action):
     return out
 
 
+def abuse_metrics(meta, actions, run_dir, t_action):
+    """RQ4: what repeated triggering costs normal users, over the trigger period.
+    unavail_s: 1-s bins in which fewer than half of the benign requests succeeded."""
+    with open(os.path.join(EVAL, "scenarios", f"{meta['scenario']}.json")) as f:
+        dur = json.load(f)["duration_s"]
+    out = {"triggers": len(meta["abuse_requests"]),
+           "triggers_answered": sum(1 for r in meta["abuse_requests"] if r["status"] != 0),
+           "terminations": sum(1 for a in actions if (a.get("body") or {}).get("status") == "success"),
+           "terminations_skipped": sum(1 for a in actions if (a.get("body") or {}).get("status") == "ignored"),
+           "restarts_total": meta.get("restarts_total")}
+    load_path = os.path.join(run_dir, "load.csv")
+    if os.path.exists(load_path):
+        with open(load_path) as f:
+            rows = [(float(r["t_send"]), int(r["status"])) for r in csv.DictReader(f)]
+        win = [r for r in rows if t_action <= r[0] < t_action + dur]
+        if win:
+            out["err_rate_abuse"] = sum(1 for r in win if r[1] != 200) / len(win)
+        bins = defaultdict(lambda: [0, 0])
+        for t, status in win:
+            b = bins[int(t - t_action)]
+            b[0] += 1
+            b[1] += status == 200
+        down = [s for s in range(int(dur)) if bins[s][0] and bins[s][1] < bins[s][0] / 2]
+        out["unavail_s"] = len(down)
+        longest = run_len = 0
+        for s in range(int(dur)):
+            run_len = run_len + 1 if s in down else 0
+            longest = max(longest, run_len)
+        out["longest_outage_s"] = longest
+    samples = read_jsonl(os.path.join(run_dir, "pods.jsonl"))
+    samples = [s for s in samples if t_action <= s["t"] <= t_action + dur and "ready" in s]
+    out["zero_ready_s"] = sum(b["t"] - a["t"] for a, b in zip(samples, samples[1:]) if a["ready"] == 0)
+    out["min_ready"] = min((s["ready"] for s in samples), default=None)
+    return out
+
+
 def analyze_run(meta, events, run_dir):
     run = meta["run"]
     t_action = meta.get("t_action")
@@ -153,6 +189,9 @@ def analyze_run(meta, events, run_dir):
         row["first_rule"] = alerts[0].get("rule")
     if actions:
         row["L_talon_notify_s"] = actions[0]["t"] - t_action
+    if "abuse_requests" in meta:
+        row.update(abuse_metrics(meta, actions, run_dir, t_action))
+        return row
 
     # Attack progress
     total = scenario_steps(meta["scenario"])
@@ -241,7 +280,9 @@ def summarize(rows):
         s = {"mechanism": mech, "scenario": scen, "n": len(rs)}
         for key in ("L_detect_s", "L_response_s", "L_api_visible_s", "attack_window_s", "steps_completed",
                     "steps_reached", "L_session_end_s", "L_kernel_kill_s", "L_app_killed_s", "L_block_alert_s", "L_first_blocked_s",
-                    "alert_pipeline_s", "err_rate_response", "p99_ms_response", "recovery_s"):
+                    "alert_pipeline_s", "err_rate_response", "p99_ms_response", "recovery_s",
+                    "terminations", "terminations_skipped", "restarts_total", "err_rate_abuse", "unavail_s",
+                    "longest_outage_s", "zero_ready_s", "min_ready"):
             vals = [r[key] for r in rs if r.get(key) is not None]
             if vals:
                 lo, hi = bootstrap_ci(vals)

@@ -1,0 +1,18 @@
+# M1g: M1 with a replica guard. Talon (0.3.0, kubernetes:terminate) skips the deletion when
+# the pod's ReplicaSet has fewer ready replicas than min_healthy_replicas (it reads
+# Status.ReadyReplicas, which still counts the target pod). With 2 replicas and "2", a pod is
+# terminated only while both are ready, so at least one replica always stays up. Used for the
+# abuse experiment (RQ4) as the mitigation; Talon's 5 s event de-duplication stays at default.
+- action: Terminate Pod Guarded
+  actionner: kubernetes:terminate
+  parameters:
+    grace_period_seconds: 0
+    min_healthy_replicas: "2"
+
+- rule: Terminate on eval detections, guarded
+  match:
+    rules:
+      - Shell Spawned in Eval Backend
+      - Sensitive Path Open in Eval Backend
+  actions:
+    - action: Terminate Pod Guarded

@@ -1,0 +1,7 @@
+{
+  "description": "Response abuse (RQ4): as s3-abuse-6pm, at 30 triggers per minute (one every 2 s) for 300 s.",
+  "type": "abuse",
+  "endpoint": "read-sensitive",
+  "interval_s": 2.0,
+  "duration_s": 300
+}

@@ -37,6 +37,8 @@ MECHANISMS = {
     "m0": {"talon_rules": "talon-none.yaml", "rasp": False, "desc": "detect only"},
     "m1": {"talon_rules": "talon-terminate.yaml", "rasp": False, "desc": "Talon pod termination"},
     "m2": {"talon_rules": "talon-netpol.yaml", "rasp": False, "desc": "Talon egress NetworkPolicy"},
+    "m1g": {"talon_rules": "talon-terminate-guarded.yaml", "rasp": False,
+            "desc": "Talon pod termination, min_healthy_replicas 2"},
     "m3": {"talon_rules": "talon-none.yaml", "rasp": False, "policy": "tetragon-kill.yaml",
            "desc": "Tetragon in-kernel Sigkill"},
     "m4": {"talon_rules": "talon-none.yaml", "rasp": False, "policy": "kubearmor-block.yaml",
@@ -159,7 +161,8 @@ class Watcher(threading.Thread):
                             self.mark("new_pod_ready", t)
                 if pols:
                     self.mark("netpol_seen", t)
-                log.write(json.dumps({"t": t, "pods": sorted(names), "netpols": len(pols),
+                ready = sum(1 for p in pods if is_ready(p) and not p["metadata"].get("deletionTimestamp"))
+                log.write(json.dumps({"t": t, "pods": sorted(names), "netpols": len(pols), "ready": ready,
                                       "target_deleting": bool(tgt and tgt["metadata"].get("deletionTimestamp"))}) + "\n")
                 time.sleep(self.interval)
 
@@ -230,6 +233,27 @@ def run_http_scenario(scenario, pod_ip):
         results.append(http_step(pod_ip, ep))
         time.sleep(scenario["interval_s"])
     return {"http_steps": results}
+
+
+def run_abuse_scenario(scenario, svc_ip):
+    """Trigger requests through the Service at a fixed interval (open loop), like an outside
+    attacker who cannot pick a replica."""
+    results, t0 = [], time.time()
+    n = int(scenario["duration_s"] / scenario["interval_s"])
+    for i in range(n):
+        wait = t0 + i * scenario["interval_s"] - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        results.append(http_step(svc_ip, scenario["endpoint"], timeout=min(3, scenario["interval_s"])))
+    return {"abuse_requests": results}
+
+
+def restart_counts():
+    """Container restarts of the backend pods that still exist (M3 restarts, M1 deletes)."""
+    pods = kubectl_json(f"get pods -n {NS} -l app=backend")["items"]
+    return {"restarts_total": sum(c.get("restartCount", 0) for p in pods
+                                  for c in p["status"].get("containerStatuses", [])),
+            "pods_at_end": len(pods)}
 
 
 def check_collector_from_pod(pod, collector):
@@ -338,6 +362,8 @@ def main():
             scenarios[s] = json.load(f)
         if "m5" in mechs and scenarios[s]["type"] == "exec":
             print(f"WARNING: m5 (RASP) only reacts to HTTP threat requests; with {s} it behaves like m0.")
+        if scenarios[s]["type"] == "abuse" and args.observe < scenarios[s]["duration_s"]:
+            sys.exit(f"--observe must cover the abuse duration ({scenarios[s]['duration_s']} s) for {s}")
 
     with_tetragon = tetragon_installed()
     if "m3" in mechs and not with_tetragon:
@@ -396,11 +422,14 @@ def main():
                     meta.update(run_exec_scenario(scenario, meta["target_pod"], run_id, collector, args.observe))
                 elif scenario["type"] == "http":
                     meta.update(run_http_scenario(scenario, meta["target_ip"]))
+                elif scenario["type"] == "abuse":
+                    meta.update(run_abuse_scenario(scenario, svc_ip))
                 remaining = meta["t_action"] + args.observe - time.time()
                 if remaining > 0:
                     time.sleep(remaining)
                 watcher.stop()
                 meta["timeline"] = watcher.timeline
+                meta.update(restart_counts())
 
                 meta.update(recompromise_probe(scenario, run_id, collector))
                 meta.update(evidence_check(meta["target_pod"]))

@@ -1,0 +1,7 @@
+{
+  "description": "Response abuse (RQ4): an outside attacker with no code execution repeatedly calls a public endpoint that makes the app open /etc/shadow, which Falco flags, through the Service (any replica). 6 triggers per minute for 300 s. Measures the availability the automated response costs.",
+  "type": "abuse",
+  "endpoint": "read-sensitive",
+  "interval_s": 10.0,
+  "duration_s": 300
+}

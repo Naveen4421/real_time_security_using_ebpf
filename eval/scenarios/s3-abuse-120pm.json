@@ -1,0 +1,7 @@
+{
+  "description": "Response abuse (RQ4): as s3-abuse-6pm, at 120 triggers per minute (one every 0.5 s) for 300 s, faster than a replacement pod becomes ready (about 1 s), so both replicas can be hit before either recovers.",
+  "type": "abuse",
+  "endpoint": "read-sensitive",
+  "interval_s": 0.5,
+  "duration_s": 300
+}
