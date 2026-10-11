@@ -134,6 +134,13 @@ eval/results/<session>/
   nanosecond, or to its kill at start under `m3`. `L_kernel_kill_s`: first `m3` kill.
   `L_app_killed_s` (HTTP): first exit of the target pod's `node server.js`.
 - `L_block_alert_s` (`m4`): first KubeArmor block alert, read from the relay's stdout.
+- Abuse runs (`s3-abuse-*`, RQ4), over the 300 s trigger period: `terminations` (Talon
+  notifications with status `success`), `restarts_total` (container restarts of the pods left at
+  the end; M3 restarts, M1 deletes), `err_rate_abuse` (failed benign requests), `unavail_s` (1 s
+  bins with under half the benign requests succeeding), `longest_outage_s`, `zero_ready_s` (time
+  the watcher saw no ready backend pod) and `min_ready`. `terminations_skipped` stays 0: in the
+  runs of 10-11 Oct 2026 Talon sent no notification for terminations that `min_healthy_replicas`
+  prevented, so the guard's effect shows as fewer `terminations` than under `m1`.
 - `recompromised`: after the observation window, the first attack step is tried again against a
   live backend pod.
 - `target_logs_available`: whether the original pod's logs can still be read after the response.
