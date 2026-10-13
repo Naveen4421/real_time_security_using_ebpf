@@ -8,6 +8,25 @@ Falco Talon (M1, M2), two in-kernel enforcers (Tetragon M3, KubeArmor M4) and th
 > pods and runs attack-like commands. `00-preflight.sh` refuses to continue if other Docker
 > containers are running.
 
+## Status: all measurement sets complete (Oct 2026)
+
+Every planned experiment has been run on the lab testbed (HP 280 Pro G6, Ubuntu 22.04, kernel 6.8,
+k3s; Falco 0.45, Talon 0.3, Tetragon 1.7.1, KubeArmor 1.7.5). No run failed.
+
+| # | Experiment | Runs | What it answers |
+|---|---|---|---|
+| Phase 1 | M0/M1/M2/M5 on `s1`, `s2` | ~160 | Detect latency, Kubernetes-level response, RASP |
+| Phase 2 | M3 Tetragon, M4 KubeArmor, exact process-exit times | 160 | In-kernel vs Kubernetes-level containment (P0-3) |
+| Abuse (RQ4) | one public trigger at 6/30/120 per min for 5 min | 60 | What repeated response costs normal users |
+| Overhead (RQ5) | 5 stacks, idle + 3 load levels, 10 reps | 200 windows | Steady-state CPU, memory, latency cost |
+| Realistic (RQ6) | Falco event-generator suite, MITRE-tagged, `s4` | 100 | Established public attacks, not hand-written (P0-2) |
+
+Headline findings: Tetragon (M3) kills the attacker's shell on spawn (~0.5 s) before any action
+runs; KubeArmor (M4) refuses each sensitive open/exec but leaves the shell alive; Talon pod
+termination (M1) lets about one action through before the pod is deleted; in-app RASP (M5) is blind
+to these OS-level attacks. On overhead, Tetragon is near-free and KubeArmor with default visibility
+is the most expensive. See [docs/containment_progress.md](../docs/containment_progress.md).
+
 ## What gets measured
 
 | Mechanism | What happens on a detection |
@@ -32,6 +51,14 @@ the pods start; Falco keeps detecting under every mechanism. Two limits found on
 | `s0-benign` | Normal traffic only. Measures false positives |
 | `s1-exec-discovery` | `kubectl exec` into the target pod, then 8 benign discovery and sensitive-path steps, 1 s apart |
 | `s2-http-triggers` | 8 calls to the app's `/api/threat/*` endpoints. The only scenario `m5` reacts to |
+| `s3-abuse-*` | One public endpoint triggered at 6, 30 or 120 per minute for 5 min (RQ4), through the Service |
+| `s4-realistic` | 13 Falco `event-generator` syscall actions run in the container, each MITRE-tagged (RQ6) |
+
+The realistic suite (`s4`) replaces the hand-written attacks with an established public tool (reviewer
+P0-2). Only actions that run as the container's non-root user with BusyBox tools and no extra
+capabilities are included; each maps to a MITRE ATT&CK for Containers technique. Its binary must be a
+**static** build (see setup step 05) because the upstream release is glibc-dynamic and will not run in
+the Alpine container, where the attack has to run to trip the `container.name=backend` policies.
 
 Every attack step sends a beacon to a collector running on the host, outside the cluster. Falco
 alerts (via Falcosidekick) and Talon actions are sent to the same collector, so all times come from
@@ -42,7 +69,7 @@ one clock. A benign load of 50 requests/s runs through the Service during every 
 Requirements: Ubuntu 22.04 or 24.04, 4+ CPUs, 8+ GB RAM, 30+ GB free disk, sudo, internet access.
 
 ```bash
-git clone -b containment-eval https://github.com/Naveen4421/real_time_security_using_ebpf.git
+git clone https://github.com/Naveen4421/real_time_security_using_ebpf.git
 cd real_time_security_using_ebpf
 
 # Each step runs only if the previous one succeeded
@@ -51,6 +78,9 @@ bash eval/setup/01-install.sh &&        # Docker (if missing), k3s, Helm (about 
 bash eval/setup/02-build-images.sh &&   # builds the backend image and loads it into k3s
 bash eval/setup/03-install-stack.sh &&  # Falco + Falcosidekick + Talon, wired to the collector
 bash eval/setup/04-install-tetragon.sh  # Tetragon: M3, and exact process exit times for every run
+
+# Only needed for the realistic-attack set (s4): builds the static event-generator binary
+bash eval/setup/05-build-eventgen.sh    # needs Docker or Go >= 1.26; output eval/attack/ (git-ignored)
 ```
 
 KubeArmor (M4) is installed only for the M4 batch and removed afterwards
@@ -84,6 +114,12 @@ tmux new -s eval
 python3 eval/harness/run.py --mechanisms m0,m1,m2 --scenarios s1-exec-discovery --runs 20       # ~3.5 h
 python3 eval/harness/run.py --mechanisms m0,m1,m2,m5 --scenarios s2-http-triggers --runs 20     # ~4.7 h
 python3 eval/harness/run.py --mechanisms m0 --scenarios s0-benign --runs 4 --observe 1800       # ~2 h, false positives
+
+# Phase 2, abuse, overhead and realistic sets have one runner each (each handles KubeArmor setup):
+bash eval/run_phase2.sh       # M3 Tetragon + M4 KubeArmor on s1 and s2 (installs/removes KubeArmor)
+bash eval/run_abuse.sh        # RQ4: m0,m1,m1g,m3 at 6/30/120 triggers per minute
+python3 eval/overhead/overhead.py --reps 10   # RQ5: 5 stacks, idle + 3 load levels
+bash eval/run_realistic.sh    # RQ6: m0,m1,m3,m5 then an m4 batch, s4 event-generator suite
 ```
 
 Detach with `Ctrl-b d`, reattach with `tmux attach -t eval`.
@@ -141,6 +177,17 @@ eval/results/<session>/
   the watcher saw no ready backend pod) and `min_ready`. `terminations_skipped` stays 0: in the
   runs of 10-11 Oct 2026 Talon sent no notification for terminations that `min_healthy_replicas`
   prevented, so the guard's effect shows as fewer `terminations` than under `m1`.
+- Realistic suite (`s4`, RQ6): the generic beacon metrics apply, plus `actions_total`,
+  `actions_detected` (a Falco alert fell in the action's time window) and `actions_killed`. A
+  separate `eventgen.csv` gives per-(mechanism, action) `ran_rate`, `detected_rate`, `killed_rate`
+  and the Falco rules seen, with the MITRE technique. A kill is credited to an action only if the
+  action actually ran (its beacon fired); under M3 the shell is killed at spawn so nothing runs, and
+  that is reported through `steps_reached` (0) and `L_kernel_kill_s`, not as per-action kills.
+- Overhead (RQ5, `eval/overhead/overhead.py`, summarised by `eval/analysis/overhead_summary.py`):
+  per-pod CPU and memory from the cgroup files and host CPU from `/proc/stat`, with benign load only.
+  The kernel bills eBPF work to the triggering process, so Tetragon's own pod shows almost no CPU; its
+  cost appears in the app's CPU and latency. The lowest load level (500 rps) is confounded by CPU
+  power saving and is left out of the comparison.
 - `recompromised`: after the observation window, the first attack step is tried again against a
   live backend pod.
 - `target_logs_available`: whether the original pod's logs can still be read after the response.

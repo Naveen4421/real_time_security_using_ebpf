@@ -25,11 +25,26 @@ To run the telemetry agent, docker containers, and validation test runners local
 Phases 1 to 3 run on mock and synthetic data, not live Falco events. Phase numbers follow the
 `ml_pipeline/test_phaseN.py` runners.
 
-## Containment Study (current research work)
+## Containment Study (measurements complete, Oct 2026)
 
-The measurement study of automated response mechanisms is described in
-[docs/containment_study_plan.md](docs/containment_study_plan.md). Its experiment harness, with
-setup scripts for a dedicated machine, is in [eval/](eval/README.md).
+A measurement study comparing automated response mechanisms for a compromised container. Plan:
+[docs/containment_study_plan.md](docs/containment_study_plan.md); harness and setup scripts:
+[eval/](eval/README.md); running write-up: [docs/containment_progress.md](docs/containment_progress.md).
+
+Six mechanisms are compared on one app: detect-only (M0), Falco Talon pod termination (M1) and egress
+NetworkPolicy (M2), Tetragon in-kernel SIGKILL (M3), KubeArmor AppArmor block (M4) and in-app RASP
+(M5). All experiments have been run on a dedicated testbed with no failed runs:
+
+| Experiment | Runs | Result in one line |
+|---|---|---|
+| Phase 1 (M0/M1/M2/M5) | ~160 | Falco detects in 1-2 ms; Talon deletes the pod ~2 s after the attack starts |
+| Phase 2 (M3, M4) + exact exit times | 160 | Tetragon kills the server process in ~1 s; KubeArmor refuses each step but the shell lives |
+| Abuse (RQ4) | 60 | Repeated M1/M3 response can take the service down; `min_healthy_replicas` removes the outage |
+| Overhead (RQ5) | 200 windows | At 2,500 rps Tetragon adds <0.1 ms p99; KubeArmor (default visibility) uses ~1.2 extra cores |
+| Realistic attacks (RQ6) | 100 | Established `event-generator` suite, MITRE-tagged: M3 kills the shell on spawn before any action; M5 is blind to syscall attacks |
+
+No single mechanism wins on speed, durability, evidence, abuse-resistance and cost together. What
+remains is writing up the results; all measurements are done.
 
 ---
 
