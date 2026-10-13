@@ -26,3 +26,5 @@ bin/
 # Experiment results (copy off the machine or add with -f when final)
 eval/results/
 eval/stack/charts/
+# Attack tooling binary (large; rebuild with eval/setup/05-build-eventgen.sh)
+eval/attack/

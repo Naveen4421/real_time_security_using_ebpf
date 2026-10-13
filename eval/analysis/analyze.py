@@ -26,7 +26,7 @@ def parse_falco_time(s):
     s = s.rstrip("Z")
     if "." in s:
         head, frac = s.split(".", 1)
-        s = f"{head}.{frac[:6]}"
+        s = f"{head}.{frac[:6].ljust(6, '0')}"  # fromisoformat needs exactly 6 digits
     return datetime.fromisoformat(s).replace(tzinfo=timezone.utc).timestamp()
 
 
@@ -63,7 +63,8 @@ def scenario_steps(name):
     path = os.path.join(EVAL, "scenarios", f"{name}.json")
     if os.path.exists(path):
         with open(path) as f:
-            return len(json.load(f).get("steps", []))
+            sc = json.load(f)
+        return len(sc.get("steps") or sc.get("actions") or [])
     return None
 
 
@@ -129,6 +130,43 @@ def kubearmor_metrics(run_dir, t_action):
     out = {"block_alerts": len(times)} if alerts else {}
     if times:
         out["L_block_alert_s"] = min(times) - t_action
+    return out
+
+
+def eventgen_actions(meta, events, run_dir, t_action, alerts):
+    """Attribute Falco alerts and Tetragon kills to each event-generator action (RQ6).
+    The beacon for action i is sent right after it runs, so action i (1-indexed) ran between
+    beacon i-1 (or the attack start) and beacon i. Beacon receive times, Falco evt_time and
+    the kill times are all on the lab-PC host clock. Returns one record per action."""
+    scen_path = os.path.join(EVAL, "scenarios", f"{meta['scenario']}.json")
+    with open(scen_path) as f:
+        acts = json.load(f).get("actions") or []  # full metadata (id, mitre, tactic); run order
+    run = meta["run"]
+    t_end = t_action + meta.get("observe_s", 120)
+    beacons = [e for e in events if e["type"] == "beacon" and e.get("run") == run and e.get("step")]
+    bt = {int(e["step"]): e["t"] for e in beacons}
+    rc = {int(e["step"]): e.get("rc") for e in beacons}
+    kills = []
+    for e in read_jsonl(os.path.join(run_dir, "tetragon.jsonl")):
+        k = next((x for x in e if x.startswith("process_")), None)
+        if k == "process_kprobe" and e[k].get("action") == "KPROBE_ACTION_SIGKILL":
+            tk = parse_falco_time(e.get("time"))
+            if tk is not None:
+                kills.append(tk)
+    at = lambda a: parse_falco_time(a.get("evt_time")) or a["t"]  # noqa: E731 (kernel time, else receive)
+    out = []
+    for i, a in enumerate(acts, 1):
+        lo = bt.get(i - 1, t_action)
+        hi = bt.get(i) or t_end
+        ran = i in bt
+        rules = sorted({al.get("rule") for al in alerts if lo < at(al) <= hi})
+        # Credit a kill to an action only if that action actually ran (its beacon fired).
+        # When the session is killed at shell spawn (M3), no beacon fires and the kill is
+        # reported through steps_reached=0 and L_kernel_kill_s, not as a per-action kill.
+        out.append({"action": a["id"], "mitre": a.get("mitre"), "tactic": a.get("tactic"),
+                    "eval_rule": a.get("detected_by_eval_rules"),
+                    "ran": ran, "rc": rc.get(i), "detected": bool(rules), "rules": rules,
+                    "killed": ran and any(lo < k <= hi for k in kills)})
     return out
 
 
@@ -230,6 +268,13 @@ def analyze_run(meta, events, run_dir):
     if reached_times and first_t is not None:
         row["attack_window_s"] = max(reached_times) - first_t
 
+    if meta.get("actions"):  # eventgen (RQ6): per-action detection and kill attribution
+        per = eventgen_actions(meta, events, run_dir, t_action, alerts)
+        row["eventgen_actions"] = per
+        row["actions_total"] = len(per)
+        row["actions_detected"] = sum(1 for a in per if a["detected"])
+        row["actions_killed"] = sum(1 for a in per if a["killed"])
+
     row.update(tetragon_metrics(run_dir, meta, t_action))
     row.update(kubearmor_metrics(run_dir, t_action))
 
@@ -282,7 +327,8 @@ def summarize(rows):
                     "steps_reached", "L_session_end_s", "L_kernel_kill_s", "L_app_killed_s", "L_block_alert_s", "L_first_blocked_s",
                     "alert_pipeline_s", "err_rate_response", "p99_ms_response", "recovery_s",
                     "terminations", "terminations_skipped", "restarts_total", "err_rate_abuse", "unavail_s",
-                    "longest_outage_s", "zero_ready_s", "min_ready"):
+                    "longest_outage_s", "zero_ready_s", "min_ready",
+                    "actions_total", "actions_detected", "actions_killed"):
             vals = [r[key] for r in rs if r.get(key) is not None]
             if vals:
                 lo, hi = bootstrap_ci(vals)
@@ -298,6 +344,37 @@ def summarize(rows):
         s["detection_rate"] = sum(1 for r in rs if r.get("alerts")) / len(rs)
         out.append(s)
     return out
+
+
+def eventgen_summary(session, rows):
+    """Per-(mechanism, action) detection, kill and block rates for the realistic suite (RQ6).
+    Writes eventgen.csv only when a run carried per-action records."""
+    groups = defaultdict(list)
+    for r in rows:
+        for a in (r.get("eventgen_actions") or []):
+            groups[(r["mechanism"], a["action"])].append(a)
+    if not groups:
+        return
+    out = []
+    for (mech, action), recs in sorted(groups.items()):
+        n = len(recs)
+        a0 = recs[0]
+        rules = sorted({x for a in recs for x in a["rules"]})
+        out.append({"mechanism": mech, "action": action, "mitre": a0["mitre"], "tactic": a0["tactic"],
+                    "n": n, "eval_rule": a0["eval_rule"],
+                    "ran_rate": sum(1 for a in recs if a["ran"]) / n,
+                    "detected_rate": sum(1 for a in recs if a["detected"]) / n,
+                    "killed_rate": sum(1 for a in recs if a["killed"]) / n,
+                    "rules_seen": ";".join(rules)})
+    write_csv(os.path.join(session, "eventgen.csv"), out)
+    detm = defaultdict(lambda: [0, 0])
+    for o in out:
+        d = detm[o["mechanism"]]
+        d[0] += o["detected_rate"] * o["n"]
+        d[1] += o["n"]
+    print("  realistic suite (RQ6) detection coverage per mechanism:")
+    for mech, (det, tot) in sorted(detm.items()):
+        print(f"    {mech}: {det / tot:.0%} of action-runs raised a Falco alert")
 
 
 def write_csv(path, rows):
@@ -326,6 +403,9 @@ def main():
         if os.path.exists(meta_path):
             with open(meta_path) as f:
                 rows.append(analyze_run(json.load(f), events, os.path.join(runs_dir, name)))
+    eventgen_summary(session, rows)  # uses the per-action records before they are dropped
+    for r in rows:
+        r.pop("eventgen_actions", None)  # a list; kept out of the flat runs.csv
     write_csv(os.path.join(session, "runs.csv"), rows)
     summary = summarize(rows)
     write_csv(os.path.join(session, "summary.csv"), summary)

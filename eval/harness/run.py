@@ -31,6 +31,9 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 EVAL = os.path.join(ROOT, "eval")
 NS = "eval"
 POLICY_SETTLE_S = 5  # time for Tetragon / KubeArmor to load a policy before the pods start
+# Static event-generator binary staged into the target container for the realistic-attack
+# scenario (RQ6); built by eval/setup/05-build-eventgen.sh. Override with $EVENTGEN_BIN.
+EVENTGEN_BIN = os.environ.get("EVENTGEN_BIN") or os.path.join(EVAL, "attack", "event-generator")
 os.environ.setdefault("KUBECONFIG", os.path.expanduser("~/.kube/config"))
 
 MECHANISMS = {
@@ -188,8 +191,8 @@ def exec_script(scenario, run_id, collector, steps=None):
     return "\n".join(lines) + "\n"
 
 
-def run_exec_scenario(scenario, pod, run_id, collector, wait_s):
-    script = exec_script(scenario, run_id, collector)
+def _feed_sh_in_pod(pod, script, wait_s):
+    """Pipe a shell script into `kubectl exec sh -s` in the target pod; return its exit code."""
     proc = subprocess.Popen(["kubectl", "exec", "-i", "-n", NS, pod, "-c", "backend", "--", "sh", "-s"],
                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     proc.stdin.write(script)
@@ -198,7 +201,35 @@ def run_exec_scenario(scenario, pod, run_id, collector, wait_s):
         proc.wait(timeout=wait_s)
     except subprocess.TimeoutExpired:
         proc.kill()
-    return {"exec_returncode": proc.returncode}
+    return proc.returncode
+
+
+def run_exec_scenario(scenario, pod, run_id, collector, wait_s):
+    rc = _feed_sh_in_pod(pod, exec_script(scenario, run_id, collector), wait_s)
+    return {"exec_returncode": rc}
+
+
+def eg_steps(scenario):
+    """Shell commands that run one event-generator action each; rc is the action's exit code
+    (0 ran, non-zero skipped or errored, 137/139 killed by Tetragon, 126 refused by KubeArmor)."""
+    return [f"/tmp/eg run --loglevel warning --logformat json {shlex.quote(a['id'])} 2>>/tmp/eg.log"
+            for a in scenario["actions"]]
+
+
+def stage_eventgen(pod):
+    """Copy the event-generator binary into the target container's /tmp (needs busybox tar)."""
+    if not os.path.exists(EVENTGEN_BIN):
+        sys.exit(f"event-generator binary not found at {EVENTGEN_BIN}; see eval/setup/05-build-eventgen.sh")
+    sh(["kubectl", "cp", EVENTGEN_BIN, f"{NS}/{pod}:/tmp/eg", "-c", "backend"], timeout=120)
+    sh(["kubectl", "exec", "-n", NS, pod, "-c", "backend", "--", "chmod", "+x", "/tmp/eg"], check=False)
+
+
+def run_eventgen_scenario(scenario, pod, run_id, collector, wait_s):
+    """Run curated event-generator actions inside the target container (RQ6, realistic attacks)."""
+    stage_eventgen(pod)
+    script = exec_script(scenario, run_id, collector, steps=eg_steps(scenario))
+    rc = _feed_sh_in_pod(pod, script, wait_s)
+    return {"exec_returncode": rc, "actions": [a["id"] for a in scenario["actions"]]}
 
 
 def http_step(ip, endpoint, timeout=3):
@@ -424,6 +455,9 @@ def main():
                     meta.update(run_http_scenario(scenario, meta["target_ip"]))
                 elif scenario["type"] == "abuse":
                     meta.update(run_abuse_scenario(scenario, svc_ip))
+                elif scenario["type"] == "eventgen":
+                    meta.update(run_eventgen_scenario(scenario, meta["target_pod"], run_id, collector,
+                                                      args.observe))
                 remaining = meta["t_action"] + args.observe - time.time()
                 if remaining > 0:
                     time.sleep(remaining)
