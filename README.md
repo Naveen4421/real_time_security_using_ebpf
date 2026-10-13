@@ -1,115 +1,117 @@
-# eBPF ML-Based Anomaly Detection & Active Response System
+# Automated Containment of Compromised Kubernetes Workloads
 
-An advanced security architecture combining kernel-level eBPF probes, edge-based machine learning anomaly inference, and dynamic policy execution for real-time threat containment.
+A measurement study of automated runtime-security responses for a compromised
+container in Kubernetes, built on eBPF tooling. The project asks a question that
+detection-focused work usually skips: once an alert fires, **what should the
+system do in the next few seconds, and what does each option actually cost?**
+
+Six responses are compared on one application under the same attacks, on a
+dedicated single-node testbed, with every claim backed by released data. The
+measurements are complete; the accompanying IEEE paper is in
+[`docs/paper/`](docs/paper/).
 
 ---
 
-## 📖 Quick Start & Local Setup
-To run the telemetry agent, docker containers, and validation test runners locally, follow the step-by-step instructions in the [Local Setup Guide](LOCAL_SETUP.md).
+## The question
 
----
+An attacker who exploits a workload typically tries to spawn a shell inside the
+container and move on from there. Detection (Falco) sees this in about 2 ms. The
+open question is the **response**: terminate the pod, cut its network, kill the
+process in the kernel, block each action, or defend from inside the app. Each
+trades off differently on speed, durability, forensic evidence, resistance to
+abuse, and running cost. This repository measures those trade-offs.
 
-## 🚀 8-Phase Security Pipeline Roadmap
+## Mechanisms compared
 
-| Phase | Title | Description | Status |
-| :--- | :--- | :--- | :--- |
-| **Phase 1** | **Data Collection & Observation** | Capture kernel events, enrich metadata, aggregate sliding windows, and stream stats. | **COMPLETED** |
-| **Phase 2** | **ML Training & Model Generation** | Feature engineering and training Isolation Forest / Autoencoder anomaly models. | **COMPLETED** |
-| **Phase 3** | **Model Deployment & Inference** | Push models to node edge agents and execute real-time edge/kernel inference. | **COMPLETED** |
-| **Phase 4** | **Anomaly Detection & Policy Gen** | Classify anomaly scores and dynamically generate eBPF C code containment rules. | Prototype |
-| **Phase 5** | **Compilation, Deployment & Response** | Compile dynamic eBPF programs via clang, verify, load, and execute response actions. | Prototype (compile falls back to a mock without clang; verifier and attach are simulated) |
-| **Phase 6** | **Feedback & Self-Improvement** | Collect operator feedback to retrain models and dynamically adjust thresholds. | Prototype (incidents auto-labelled) |
-| **Phase 7** | **Monitoring & Observability** | Feed metrics to Prometheus dashboards and track latency/accuracy. | Prototype (metric values are constants) |
-| **Phase 8** | **Production Hardening** | Input sanitization, circuit breaker, caching, per-tenant quotas. | Prototype |
+| ID  | Response on detection | Tool / layer |
+|-----|-----------------------|--------------|
+| M0  | Detect only (baseline) | Falco (eBPF) |
+| M1  | Delete the pod; the Deployment recreates it | Falco Talon |
+| M1g | M1 with a minimum-healthy-replicas guard | Falco Talon |
+| M2  | Apply an egress-blocking NetworkPolicy | Falco Talon + Kubernetes |
+| M3  | `SIGKILL` the offending process in the kernel | Tetragon (eBPF kprobe) |
+| M4  | Refuse each dangerous action; process stays alive | KubeArmor (AppArmor LSM) |
+| M5  | Return 403 from inside the app on threat routes | In-app RASP (`app/backend/server.js`) |
 
-Phases 1 to 3 run on mock and synthetic data, not live Falco events. Phase numbers follow the
-`ml_pipeline/test_phaseN.py` runners.
+## What the measurements show
 
-## Containment Study (measurements complete, Oct 2026)
+580 attack and abuse runs plus 200 overhead windows, none discarded. The central
+result: **no mechanism wins on speed, durability, evidence, abuse-resistance, and
+cost together, which argues for a layered response chosen per workload.**
 
-A measurement study comparing automated response mechanisms for a compromised container. Plan:
-[docs/containment_study_plan.md](docs/containment_study_plan.md); harness and setup scripts:
-[eval/](eval/README.md); running write-up: [docs/containment_progress.md](docs/containment_progress.md).
-
-Six mechanisms are compared on one app: detect-only (M0), Falco Talon pod termination (M1) and egress
-NetworkPolicy (M2), Tetragon in-kernel SIGKILL (M3), KubeArmor AppArmor block (M4) and in-app RASP
-(M5). All experiments have been run on a dedicated testbed with no failed runs:
-
-| Experiment | Runs | Result in one line |
+| Experiment | Runs | One-line result |
 |---|---|---|
-| Phase 1 (M0/M1/M2/M5) | ~160 | Falco detects in 1-2 ms; Talon deletes the pod ~2 s after the attack starts |
-| Phase 2 (M3, M4) + exact exit times | 160 | Tetragon kills the server process in ~1 s; KubeArmor refuses each step but the shell lives |
-| Abuse (RQ4) | 60 | Repeated M1/M3 response can take the service down; `min_healthy_replicas` removes the outage |
-| Overhead (RQ5) | 200 windows | At 2,500 rps Tetragon adds <0.1 ms p99; KubeArmor (default visibility) uses ~1.2 extra cores |
-| Realistic attacks (RQ6) | 100 | Established `event-generator` suite, MITRE-tagged: M3 kills the shell on spawn before any action; M5 is blind to syscall attacks |
+| Detection + containment (s1, s2) | ~320 | Falco alerts in ~2 ms; M1 returns from the API in 0.02-0.10 s but the attacker's process lives ~2 s and re-compromises the replacement pod every time; M3 kills the shell in 0.09 s with no step completed; M4 refuses every command but the shell stays alive |
+| Abuse of the response (RQ4) | 60 | At 6 triggers/min, in-kernel termination (M3) kept the service unavailable 225 of 300 s; the M1g replica guard removes the outage entirely (0 s down) |
+| Steady-state overhead (RQ5) | 200 windows | At 2,500 req/s, Tetragon adds under 0.1 ms p99; KubeArmor at default visibility uses about 1.2 extra cores |
+| Realistic attacks (RQ6) | 100 | 13 MITRE ATT&CK-tagged actions from Falco's `event-generator`: M3 kills the shell on spawn before any technique runs; M5 is blind to syscall-level attacks |
 
-No single mechanism wins on speed, durability, evidence, abuse-resistance and cost together. What
-remains is writing up the results; all measurements are done.
+A per-mechanism scorecard across all five dimensions is in the paper (Table V)
+and in [`docs/containment_progress.md`](docs/containment_progress.md).
 
----
+## Testbed
 
-## 📁 Repository Directory Structure
+Single-node k3s on an HP 280 Pro G6, Ubuntu 22.04 (kernel 6.8). Falco, Falco
+Talon, Tetragon, and KubeArmor (AppArmor back end) as the response layers; a
+`node:18-alpine` backend running non-root with two replicas as the target. All
+timestamps come from one host clock. Experiments ran only on this dedicated lab
+machine, never on a shared or production host.
 
-*   **`ml_pipeline/`**: The Core Python ML security pipeline.
-    *   `data_collection.py`: Phase 1 parser, sliding window manager, K8s metadata enricher, and statistics computer.
-    *   `test_phase1.py` & `demo_phase1.py`: Validation runners for Phase 1.
-    *   `model_training.py`: Phase 2 feature mapping, Isolation Forest and PyTorch Autoencoder training loops.
-    *   `test_phase2.py`: Validation runner to fit, save, and evaluate models.
-    *   `model_inference.py`: Phase 3 edge deployment and real-time inference processor.
-    *   `test_phase3.py`: Validation runner for model deployment and edge inference.
-*   **`configs/`**: Configuration manifests for local and Kubernetes infrastructure layers.
-*   **`app/`**: Legacy simulator app (vanilla Web UI console and Express server).
+## Reproducing the measurements
 
----
+The harness, scenarios, mechanism configs, and analysis live in
+[`eval/`](eval/README.md).
 
-## 🛠️ Phase 1: Data Collection & Observation
-
-### Features Included:
-1. **eBPF Syscall Parsing:** Handles raw JSON/dictionary events generated by kernel probes.
-2. **Kubernetes Enrichment:** Queries the local cluster (`kubectl`) to dynamically map node names, pods, and namespaces using the container ID.
-3. **Sliding Window Aggregation:** Maintains an in-memory thread-safe event window tracking process, file, network, and resource usage changes over time.
-4. **Statistical Feature Calculation:** Computes rate metrics (syscall frequency, file access rates) and counts (sensitive paths accessed, process tree depth).
-5. **Cloud Stream Target:** Streams stats to the central cloud control plane (represented by a local `cloud_stream.json` target).
-
-### Verification
-To execute and verify the Phase 1 pipeline:
 ```bash
-cd ml_pipeline
-python3 test_phase1.py
+cd eval
+# one-time: install the stack and build the static event-generator binary
+ls setup/                     # 0x-*.sh install scripts
+bash setup/05-build-eventgen.sh
+
+# run the suites (each writes raw per-run data under eval/results/)
+bash run_full.sh              # detection + containment (s1, s2)
+bash run_phase2.sh            # Tetragon / KubeArmor exit-time detail
+bash run_abuse.sh             # RQ4 abuse
+bash run_realistic.sh         # RQ6 realistic MITRE-tagged suite
+# overhead (RQ5) lives under eval/overhead/
+
+# analyse
+python3 analysis/analyze.py
 ```
 
----
+## Repository layout
 
-## 🧠 Phase 2: ML Training & Model Generation
+| Path | Contents |
+|---|---|
+| [`eval/`](eval/README.md) | Measurement harness, attack scenarios, mechanism configs, analysis scripts, raw results |
+| [`app/`](app/) | Target full-stack app; the backend also implements the M5 in-app RASP |
+| [`docs/paper/`](docs/paper/) | IEEE paper (PDF + DOCX), figures, and LaTeX sources |
+| [`docs/containment_progress.md`](docs/containment_progress.md) | Running write-up of every experiment and result |
+| [`docs/containment_study_plan.md`](docs/containment_study_plan.md) | Study plan and mechanism definitions |
+| [`ml_pipeline/`](ml_pipeline/) | Prototype learned-scoring layer (future work; see below) |
+| [`configs/`](configs/) | Local and Kubernetes infrastructure manifests |
 
-### Features Included:
-1. **14-Dimensional Feature Mapping:** Translates collected window streams into structured floats for ML libraries.
-2. **Isolation Forest Outlier Detection:** Fits a forest of estimators to identify structural shifts in host syscall usage.
-3. **Deep Bottleneck Autoencoder:** Implements an encoder/decoder PyTorch neural network to reconstruct normal container usage patterns. Anomaly scoring is based on MSE reconstruction errors.
-4. **Model Serialization:** Auto-saves binary states under `ml_pipeline/models/` for downstream inference deployment.
-5. **Ensemble Aggregation:** Combines multiple ML output probabilities into a single threat metric.
+## Learned-scoring layer (future work)
 
-### Verification
-To execute and verify the Phase 2 training engine:
-```bash
-cd ml_pipeline
-python3 test_phase2.py
-```
+`ml_pipeline/` contains a design for a machine-learning layer meant to flag
+behaviour no hand-written rule anticipates: a 14-feature per-container window fed
+to an isolation forest and a PyTorch autoencoder, combined into an anomaly score.
 
----
+This layer is **future work and is not part of the measured results.** The code
+has only been exercised on synthetic data (105 samples), has not run on live
+Falco telemetry, and no accuracy is claimed for it. The planned path to make it
+real: capture benign telemetry from live Falco events, build a labeled
+attack/benign set from the `eval/` scenarios, fit a feature scaler at training
+time, then measure precision, recall, and false-positive rate under the same
+protocol before it is ever allowed to trigger automated enforcement.
 
-## ⚡ Phase 3: Model Deployment & Inference
+## Paper
 
-### Features Included:
-1. **Edge Deployment Packaging:** Simulates secure serialization packaging to distribute weights to Kubernetes node edge agents.
-2. **Dynamic Edge Inference:** Integrates Isolation Forest outliers with Autoencoder reconstruction MSE errors to yield an ensemble anomaly decision score.
-3. **Severity Profiling:** Automatically maps continuous scores into severity buckets (`LOW`, `MEDIUM`, `HIGH`, `CRITICAL`) using baseline statistical metrics.
-4. **Kernel-Level Simulation:** Attaches BPF kprobe handlers to target calls and polls performance buffer score maps.
+- [`docs/paper/eBPF_Containment_Measurement_IEEE.pdf`](docs/paper/) and the
+  editable `.docx` alongside it.
+- Title: *A Measurement Study of Automated Containment for Compromised Kubernetes
+  Workloads: An eBPF-Based Cross-Layer Comparison.*
 
-### Verification
-To execute and verify Phase 3 edge deployment and inference:
-```bash
-cd ml_pipeline
-python3 test_phase3.py
-```
-This deploys the trained models, runs telemetry checks, profiles threats, and starts the kernel polling loop.
+## License
+
+See [LICENSE](LICENSE).
