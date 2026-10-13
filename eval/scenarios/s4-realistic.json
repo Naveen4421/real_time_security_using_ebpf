@@ -1,0 +1,20 @@
+{
+  "description": "Realistic attack suite (RQ6): curated Falco event-generator syscall actions run inside the target container, replacing the hand-written scenarios (reviewer P0-2). Only actions that run as the container's non-root user (UID 10001) with BusyBox tools and no extra capabilities are included; each is tagged with its MITRE ATT&CK technique. Actions that need root, privileged containers, host mounts or absent tools (shred, ssh) are left out.",
+  "type": "eventgen",
+  "interval_s": 2.0,
+  "actions": [
+    {"id": "syscall.ReadSensitiveFileUntrusted", "name": "Read /etc/shadow", "mitre": "T1552.001", "tactic": "credential-access", "detected_by_eval_rules": true},
+    {"id": "syscall.ReadSensitiveFileTrustedAfterStartup", "name": "Read /etc/shadow after startup (as httpd)", "mitre": "T1552.001", "tactic": "credential-access", "detected_by_eval_rules": true},
+    {"id": "syscall.DirectoryTraversalMonitoredFileRead", "name": "Path-traversal read of /etc/shadow", "mitre": "T1083", "tactic": "discovery", "detected_by_eval_rules": true},
+    {"id": "syscall.SearchPrivateKeysOrPasswords", "name": "Search for id_rsa", "mitre": "T1552.004", "tactic": "credential-access", "detected_by_eval_rules": false},
+    {"id": "syscall.FindAwsCredentials", "name": "Find AWS credentials", "mitre": "T1552.001", "tactic": "credential-access", "detected_by_eval_rules": false},
+    {"id": "syscall.RunShellUntrusted", "name": "Spawn an untrusted shell", "mitre": "T1059.004", "tactic": "execution", "detected_by_eval_rules": true},
+    {"id": "syscall.ExecutionFromDevShm", "name": "Execute a script from /dev/shm", "mitre": "T1059.004", "tactic": "execution", "detected_by_eval_rules": true},
+    {"id": "syscall.FilelessExecutionViaMemfdCreate", "name": "Fileless exec via memfd_create", "mitre": "T1620", "tactic": "defense-evasion", "detected_by_eval_rules": false},
+    {"id": "syscall.CreateSymlinkOverSensitiveFiles", "name": "Symlink over /etc", "mitre": "T1222.002", "tactic": "defense-evasion", "detected_by_eval_rules": false},
+    {"id": "syscall.CreateHardlinkOverSensitiveFiles", "name": "Hardlink over /etc/shadow", "mitre": "T1222.002", "tactic": "defense-evasion", "detected_by_eval_rules": false},
+    {"id": "syscall.ClearLogActivities", "name": "Clear log activity", "mitre": "T1070.002", "tactic": "defense-evasion", "detected_by_eval_rules": false},
+    {"id": "syscall.PtraceAttachedToProcess", "name": "ptrace attach to a process", "mitre": "T1055.008", "tactic": "privilege-escalation", "detected_by_eval_rules": false},
+    {"id": "syscall.PtraceAntiDebugAttempt", "name": "ptrace anti-debug (TRACEME)", "mitre": "T1622", "tactic": "defense-evasion", "detected_by_eval_rules": false}
+  ]
+}

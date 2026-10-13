@@ -1,0 +1,26 @@
+# M4: KubeArmor blocks (AppArmor enforcer on the lab PC) what the two Falco eval rules
+# detect: starting a shell in the backend, and opening /etc/shadow or /bin/hack.
+# The call fails with "permission denied"; no process is killed. Applied to namespace
+# "eval" by the harness before the pods start.
+#
+# The backend image is Alpine: /bin/sh and /bin/ash are symlinks to /bin/busybox, and
+# AppArmor matches the resolved path. A policy listing /bin/sh blocks nothing (checked on
+# the lab PC, 10 Oct 2026), so the closest policy that blocks shells is /bin/busybox,
+# which also blocks every other BusyBox tool (cat, ls, wget, ...).
+apiVersion: security.kubearmor.com/v1
+kind: KubeArmorPolicy
+metadata:
+  name: eval-m4-block
+spec:
+  selector:
+    matchLabels:
+      app: backend
+  process:
+    matchPaths:
+    - path: /bin/busybox
+    - path: /bin/bash
+  file:
+    matchPaths:
+    - path: /etc/shadow
+    - path: /bin/hack
+  action: Block

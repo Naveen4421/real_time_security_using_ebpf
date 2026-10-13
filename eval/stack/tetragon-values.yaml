@@ -1,0 +1,19 @@
+# Tetragon: in-kernel enforcement for M3 and process exec/exit timing for every run.
+# Export only events from the eval namespace, plus every action of the M3 policy: a
+# process started by `kubectl exec` can be killed before Tetragon links it to the pod,
+# so its kill event has no namespace. The chart's default denylist drops events with
+# no namespace (and the denylist wins), so it is replaced here without that entry.
+#
+# The kubearmor-app label keeps KubeArmor's admission webhook (M4 batch) from attaching an
+# AppArmor profile to Tetragon: with one, Tetragon cannot clean its pinned BPF maps on
+# restart and fails to start (seen on the lab PC, 10 Oct 2026).
+podLabels:
+  kubearmor-app: excluded
+tetragon:
+  exportAllowList: |-
+    {"namespace":["eval"],"event_set":["PROCESS_EXEC","PROCESS_EXIT","PROCESS_KPROBE","PROCESS_LSM"]}
+    {"policy_names":["eval-m3-kill"]}
+  exportDenyList: |-
+    {"health_check":true}
+    {"namespace":["cilium","kube-system"]}
+  exportFileMaxSizeMB: 100

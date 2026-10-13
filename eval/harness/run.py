@@ -5,13 +5,17 @@ For every (mechanism, scenario) pair it performs --runs repetitions in a shuffle
 order. Each run: fresh namespace and pods, warm-up under load, attack scenario,
 observation window, re-compromise probe, evidence check, teardown.
 
-Safe mechanisms only so far: m0 (detect only), m1 (Talon terminate),
-m2 (Talon egress NetworkPolicy), m5 (in-app RASP).
+Mechanisms: m0 (detect only), m1 (Talon terminate), m2 (Talon egress NetworkPolicy),
+m3 (Tetragon in-kernel kill), m4 (KubeArmor block), m5 (in-app RASP).
+m3 and m4 are policies applied to the namespace before the pods start; Falco keeps
+detecting under every mechanism. If Tetragon is installed, its process events for
+the namespace are saved with every run (exact process exit and kill times).
 
 Run from the repo root, e.g.:
   python3 eval/harness/run.py --mechanisms m0,m1,m2,m5 --scenarios s1-exec-discovery --runs 20
 """
 import argparse
+import glob
 import json
 import os
 import random
@@ -26,11 +30,22 @@ import urllib.request
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 EVAL = os.path.join(ROOT, "eval")
 NS = "eval"
+POLICY_SETTLE_S = 5  # time for Tetragon / KubeArmor to load a policy before the pods start
+# Static event-generator binary staged into the target container for the realistic-attack
+# scenario (RQ6); built by eval/setup/05-build-eventgen.sh. Override with $EVENTGEN_BIN.
+EVENTGEN_BIN = os.environ.get("EVENTGEN_BIN") or os.path.join(EVAL, "attack", "event-generator")
+os.environ.setdefault("KUBECONFIG", os.path.expanduser("~/.kube/config"))
 
 MECHANISMS = {
     "m0": {"talon_rules": "talon-none.yaml", "rasp": False, "desc": "detect only"},
     "m1": {"talon_rules": "talon-terminate.yaml", "rasp": False, "desc": "Talon pod termination"},
     "m2": {"talon_rules": "talon-netpol.yaml", "rasp": False, "desc": "Talon egress NetworkPolicy"},
+    "m1g": {"talon_rules": "talon-terminate-guarded.yaml", "rasp": False,
+            "desc": "Talon pod termination, min_healthy_replicas 2"},
+    "m3": {"talon_rules": "talon-none.yaml", "rasp": False, "policy": "tetragon-kill.yaml",
+           "desc": "Tetragon in-kernel Sigkill"},
+    "m4": {"talon_rules": "talon-none.yaml", "rasp": False, "policy": "kubearmor-block.yaml",
+           "desc": "KubeArmor block (AppArmor)"},
     "m5": {"talon_rules": "talon-none.yaml", "rasp": True, "desc": "in-app RASP lockdown"},
 }
 
@@ -69,9 +84,17 @@ def talon_deployment():
     return names[0]
 
 
+def talon_chart():
+    """Local chart file downloaded by setup/03-install-stack.sh (no network needed)."""
+    charts = sorted(glob.glob(os.path.join(EVAL, "stack", "charts", "falco-talon-*.tgz")))
+    if not charts:
+        raise RuntimeError("Talon chart not found in eval/stack/charts; run eval/setup/03-install-stack.sh")
+    return charts[-1]
+
+
 def apply_mechanism(mech):
     rules = os.path.join(EVAL, "mechanisms", MECHANISMS[mech]["talon_rules"])
-    sh(f"helm upgrade falco-talon falcosecurity/falco-talon -n falco --reuse-values "
+    sh(f"helm upgrade falco-talon {shlex.quote(talon_chart())} -n falco --reuse-values "
        f"--set-file config.rulesOverride={shlex.quote(rules)}", timeout=600)
     deploy = talon_deployment()
     sh(f"kubectl rollout restart -n falco {deploy}")
@@ -79,9 +102,12 @@ def apply_mechanism(mech):
     time.sleep(3)
 
 
-def deploy_app(rasp):
+def deploy_app(rasp, policy=None):
     sh(f"kubectl delete namespace {NS} --ignore-not-found --wait=true --timeout=180s", timeout=200)
     sh(f"kubectl create namespace {NS}")
+    if policy:
+        sh(f"kubectl apply -n {NS} -f {shlex.quote(os.path.join(EVAL, 'mechanisms', policy))}")
+        time.sleep(POLICY_SETTLE_S)
     with open(os.path.join(EVAL, "k8s", "app.yaml")) as f:
         manifest = f.read().replace("__RASP__", "true" if rasp else "false")
     sh(f"kubectl apply -n {NS} -f -", input_text=manifest)
@@ -113,12 +139,14 @@ class Watcher(threading.Thread):
         known_pods = None
         with open(self.out_path, "w") as log:
             while not self.stop_event.is_set():
-                t = time.time()
                 try:
                     items = kubectl_json(f"get pods,networkpolicies -n {NS}")["items"]
                 except Exception:
                     time.sleep(self.interval)
                     continue
+                # Stamp after the query returns: the observed state held by then,
+                # so timeline values are upper bounds (resolution ~ one query, ~0.3 s).
+                t = time.time()
                 pods = [i for i in items if i["kind"] == "Pod"]
                 pols = [i for i in items if i["kind"] == "NetworkPolicy"]
                 names = {p["metadata"]["name"] for p in pods}
@@ -136,7 +164,8 @@ class Watcher(threading.Thread):
                             self.mark("new_pod_ready", t)
                 if pols:
                     self.mark("netpol_seen", t)
-                log.write(json.dumps({"t": t, "pods": sorted(names), "netpols": len(pols),
+                ready = sum(1 for p in pods if is_ready(p) and not p["metadata"].get("deletionTimestamp"))
+                log.write(json.dumps({"t": t, "pods": sorted(names), "netpols": len(pols), "ready": ready,
                                       "target_deleting": bool(tgt and tgt["metadata"].get("deletionTimestamp"))}) + "\n")
                 time.sleep(self.interval)
 
@@ -148,18 +177,22 @@ class Watcher(threading.Thread):
 def exec_script(scenario, run_id, collector, steps=None):
     """Shell script run inside the pod: each step, then a beacon to the collector."""
     steps = scenario["steps"] if steps is None else steps
+    # The beacon uses node, not BusyBox wget: under M4 KubeArmor blocks /bin/busybox, which
+    # would silence a wget beacon while the attacker's shell is still alive.
     lines = [
         f'C="{collector}/beacon?run={run_id}"',
-        'b(){ wget -q -T 2 -O /dev/null "$C&step=$1" 2>/dev/null; }',
-        "b 0",
+        "b(){ node -e 'fetch(process.argv[1],{signal:AbortSignal.timeout(2000)}).catch(()=>{})' "
+        '"$C&step=$1&rc=$2" >/dev/null 2>&1; }',
+        "b 0 0",
     ]
     for i, cmd in enumerate(steps, 1):
-        lines.append(f"sh -c {shlex.quote(cmd)} >/dev/null 2>&1; b {i}; sleep {scenario['interval_s']}")
+        # rc = the step's exit code (137 = killed, 126/127 = could not be executed)
+        lines.append(f"sh -c {shlex.quote(cmd)} >/dev/null 2>&1; b {i} $?; sleep {scenario['interval_s']}")
     return "\n".join(lines) + "\n"
 
 
-def run_exec_scenario(scenario, pod, run_id, collector, wait_s):
-    script = exec_script(scenario, run_id, collector)
+def _feed_sh_in_pod(pod, script, wait_s):
+    """Pipe a shell script into `kubectl exec sh -s` in the target pod; return its exit code."""
     proc = subprocess.Popen(["kubectl", "exec", "-i", "-n", NS, pod, "-c", "backend", "--", "sh", "-s"],
                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     proc.stdin.write(script)
@@ -168,20 +201,61 @@ def run_exec_scenario(scenario, pod, run_id, collector, wait_s):
         proc.wait(timeout=wait_s)
     except subprocess.TimeoutExpired:
         proc.kill()
-    return {"exec_returncode": proc.returncode}
+    return proc.returncode
+
+
+def run_exec_scenario(scenario, pod, run_id, collector, wait_s):
+    rc = _feed_sh_in_pod(pod, exec_script(scenario, run_id, collector), wait_s)
+    return {"exec_returncode": rc}
+
+
+def eg_steps(scenario):
+    """Shell commands that run one event-generator action each; rc is the action's exit code
+    (0 ran, non-zero skipped or errored, 137/139 killed by Tetragon, 126 refused by KubeArmor)."""
+    return [f"/tmp/eg run --loglevel warning --logformat json {shlex.quote(a['id'])} 2>>/tmp/eg.log"
+            for a in scenario["actions"]]
+
+
+def stage_eventgen(pod):
+    """Copy the event-generator binary into the target container's /tmp (needs busybox tar)."""
+    if not os.path.exists(EVENTGEN_BIN):
+        sys.exit(f"event-generator binary not found at {EVENTGEN_BIN}; see eval/setup/05-build-eventgen.sh")
+    sh(["kubectl", "cp", EVENTGEN_BIN, f"{NS}/{pod}:/tmp/eg", "-c", "backend"], timeout=120)
+    sh(["kubectl", "exec", "-n", NS, pod, "-c", "backend", "--", "chmod", "+x", "/tmp/eg"], check=False)
+
+
+def run_eventgen_scenario(scenario, pod, run_id, collector, wait_s):
+    """Run curated event-generator actions inside the target container (RQ6, realistic attacks)."""
+    stage_eventgen(pod)
+    script = exec_script(scenario, run_id, collector, steps=eg_steps(scenario))
+    rc = _feed_sh_in_pod(pod, script, wait_s)
+    return {"exec_returncode": rc, "actions": [a["id"] for a in scenario["actions"]]}
 
 
 def http_step(ip, endpoint, timeout=3):
     t = time.time()
     req = urllib.request.Request(f"http://{ip}:5000/api/threat/{endpoint}", method="POST", data=b"")
+    body = ""
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            status = r.status
+            status, body = r.status, r.read(400).decode(errors="replace")
     except urllib.error.HTTPError as e:
-        status = e.code
-    except Exception:
-        status = 0
-    return {"t": t, "endpoint": endpoint, "status": status}
+        status, body = e.code, e.read(400).decode(errors="replace")
+    except Exception as e:
+        status, body = 0, type(e).__name__
+    return {"t": t, "endpoint": endpoint, "status": status, "body": body}
+
+
+def http_step_ran(status, body=None):
+    """The step reached the app and was not blocked. 403 = RASP lockdown, 0 = no response.
+    spawn-shell returns 500 even when the shell ran, because `whoami` fails for UID 10001;
+    the body then says "unknown uid". A 500 without it means the shell was killed or never
+    started (M3/M4). body=None (runs recorded before bodies were saved): 500 counts as ran."""
+    if status in (0, 403):
+        return False
+    if status == 500 and body is not None:
+        return "unknown uid" in body
+    return True
 
 
 def run_http_scenario(scenario, pod_ip):
@@ -190,6 +264,27 @@ def run_http_scenario(scenario, pod_ip):
         results.append(http_step(pod_ip, ep))
         time.sleep(scenario["interval_s"])
     return {"http_steps": results}
+
+
+def run_abuse_scenario(scenario, svc_ip):
+    """Trigger requests through the Service at a fixed interval (open loop), like an outside
+    attacker who cannot pick a replica."""
+    results, t0 = [], time.time()
+    n = int(scenario["duration_s"] / scenario["interval_s"])
+    for i in range(n):
+        wait = t0 + i * scenario["interval_s"] - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        results.append(http_step(svc_ip, scenario["endpoint"], timeout=min(3, scenario["interval_s"])))
+    return {"abuse_requests": results}
+
+
+def restart_counts():
+    """Container restarts of the backend pods that still exist (M3 restarts, M1 deletes)."""
+    pods = kubectl_json(f"get pods -n {NS} -l app=backend")["items"]
+    return {"restarts_total": sum(c.get("restartCount", 0) for p in pods
+                                  for c in p["status"].get("containerStatuses", [])),
+            "pods_at_end": len(pods)}
 
 
 def check_collector_from_pod(pod, collector):
@@ -215,7 +310,8 @@ def recompromise_probe(scenario, run_id, collector):
         return {"recheck_pod": pod["metadata"]["name"], "recheck_run": f"{run_id}-recheck"}
     if scenario["type"] == "http":
         res = http_step(pod["status"]["podIP"], scenario["steps"][0])
-        return {"recheck_pod": pod["metadata"]["name"], "recheck_ok": res["status"] == 200, "recheck_http": res}
+        return {"recheck_pod": pod["metadata"]["name"], "recheck_ok": http_step_ran(res["status"], res["body"]),
+                "recheck_http": res}
     return {}
 
 
@@ -225,6 +321,35 @@ def evidence_check(target):
         return {"target_logs_available": True}
     except Exception:
         return {"target_logs_available": False}
+
+
+def tetragon_installed():
+    return bool(sh("kubectl get ds -n kube-system tetragon --ignore-not-found -o name", check=False))
+
+
+def save_tetragon_events(since_epoch, path):
+    """Tetragon's exported events for namespace eval (process exec/exit, policy kills).
+    Times are host wall clock, the same clock as the collector."""
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since_epoch))
+    out = sh(f"kubectl logs -n kube-system ds/tetragon -c export-stdout --since-time={since}",
+             check=False, timeout=60)
+    with open(path, "w") as f:
+        f.write(out + "\n" if out else "")
+
+
+def kubearmor_installed():
+    return bool(sh("kubectl get deploy -n kubearmor -o name --ignore-not-found", check=False))
+
+
+def save_kubearmor_alerts(since_epoch, path):
+    """KubeArmor policy alerts for namespace eval, from the relay's stdout (JSON lines;
+    UpdatedTime is host wall clock)."""
+    since = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since_epoch))
+    relay = sh("kubectl get pods -n kubearmor -o name", check=False).split()
+    relay = [r for r in relay if "relay" in r]
+    out = sh(f"kubectl logs -n kubearmor {relay[0]} --since-time={since}", check=False, timeout=60) if relay else ""
+    with open(path, "w") as f:
+        f.writelines(line + "\n" for line in out.splitlines() if '"NamespaceName":"eval"' in line)
 
 
 def record_versions(path):
@@ -268,6 +393,15 @@ def main():
             scenarios[s] = json.load(f)
         if "m5" in mechs and scenarios[s]["type"] == "exec":
             print(f"WARNING: m5 (RASP) only reacts to HTTP threat requests; with {s} it behaves like m0.")
+        if scenarios[s]["type"] == "abuse" and args.observe < scenarios[s]["duration_s"]:
+            sys.exit(f"--observe must cover the abuse duration ({scenarios[s]['duration_s']} s) for {s}")
+
+    with_tetragon = tetragon_installed()
+    if "m3" in mechs and not with_tetragon:
+        sys.exit("m3 needs Tetragon: run bash eval/setup/04-install-tetragon.sh")
+    with_kubearmor = kubearmor_installed()
+    if "m4" in mechs and not with_kubearmor:
+        sys.exit("m4 needs KubeArmor: run bash eval/setup/kubearmor.sh install")
 
     session = args.out or os.path.join(EVAL, "results", time.strftime("%Y%m%d-%H%M%S"))
     os.makedirs(os.path.join(session, "runs"), exist_ok=True)
@@ -296,7 +430,7 @@ def main():
                 if mech != current:
                     apply_mechanism(mech)
                     current = mech
-                deploy_app(MECHANISMS[mech]["rasp"])
+                deploy_app(MECHANISMS[mech]["rasp"], MECHANISMS[mech].get("policy"))
                 pods = backend_pods()
                 target = pods[0]
                 if idx == 0:
@@ -319,14 +453,24 @@ def main():
                     meta.update(run_exec_scenario(scenario, meta["target_pod"], run_id, collector, args.observe))
                 elif scenario["type"] == "http":
                     meta.update(run_http_scenario(scenario, meta["target_ip"]))
+                elif scenario["type"] == "abuse":
+                    meta.update(run_abuse_scenario(scenario, svc_ip))
+                elif scenario["type"] == "eventgen":
+                    meta.update(run_eventgen_scenario(scenario, meta["target_pod"], run_id, collector,
+                                                      args.observe))
                 remaining = meta["t_action"] + args.observe - time.time()
                 if remaining > 0:
                     time.sleep(remaining)
                 watcher.stop()
                 meta["timeline"] = watcher.timeline
+                meta.update(restart_counts())
 
                 meta.update(recompromise_probe(scenario, run_id, collector))
                 meta.update(evidence_check(meta["target_pod"]))
+                if with_tetragon:
+                    save_tetragon_events(meta["t_action"] - 5, os.path.join(run_dir, "tetragon.jsonl"))
+                if with_kubearmor:
+                    save_kubearmor_alerts(meta["t_action"] - 5, os.path.join(run_dir, "kubearmor.jsonl"))
                 load.wait(timeout=60)
                 meta["ok"] = True
             except Exception as e:

@@ -1,8 +1,8 @@
 # Containment Study: Experiment Harness
 
 Runs the experiments from [docs/containment_study_plan.md](../docs/containment_study_plan.md) on a
-single-node k3s cluster. Implemented so far: the four mechanisms that act through Kubernetes or the
-app (M0, M1, M2, M5). Tetragon (M3) and KubeArmor (M4) come later.
+single-node k3s cluster. Six mechanisms: detect only (M0), two Kubernetes-level responses through
+Falco Talon (M1, M2), two in-kernel enforcers (Tetragon M3, KubeArmor M4) and the app's own RASP (M5).
 
 > **Safety:** run this only on a dedicated machine. It loads eBPF probes into the host kernel, kills
 > pods and runs attack-like commands. `00-preflight.sh` refuses to continue if other Docker
@@ -15,7 +15,17 @@ app (M0, M1, M2, M5). Tetragon (M3) and KubeArmor (M4) come later.
 | `m0` | Nothing (detect-only baseline) |
 | `m1` | Falco Talon deletes the pod (`kubernetes:terminate`, grace period 0); the Deployment recreates it |
 | `m2` | Falco Talon creates a NetworkPolicy blocking **egress** for **all replicas** of the Deployment (`kubernetes:networkpolicy`) |
+| `m3` | Tetragon kills (SIGKILL, in the kernel) any process in the backend that starts a shell or opens `/etc/shadow` or `/bin/hack` (`mechanisms/tetragon-kill.yaml`) |
+| `m4` | KubeArmor (AppArmor enforcer) refuses to run `/bin/busybox` and to open `/etc/shadow` or `/bin/hack` in the backend (`mechanisms/kubearmor-block.yaml`) |
 | `m5` | The app's own RASP returns 403 on threat routes for 30 s after 3 threat requests |
+
+M3 and M4 enforce the same two behaviours the Falco eval rules detect, as policies applied before
+the pods start; Falco keeps detecting under every mechanism. Two limits found on the lab PC shape M4:
+- `/bin/sh` in the Alpine image is a symlink to `/bin/busybox`, and AppArmor matches the resolved
+  path, so a policy listing `/bin/sh` blocks nothing. Blocking shells means blocking BusyBox, which
+  also blocks `cat`, `ls`, `wget` and every other BusyBox tool.
+- The first program started by `kubectl exec` runs before the container's AppArmor profile applies,
+  so the attacker's entry shell starts; only the programs it then runs are refused.
 
 | Scenario | What it does |
 |---|---|
@@ -35,11 +45,19 @@ Requirements: Ubuntu 22.04 or 24.04, 4+ CPUs, 8+ GB RAM, 30+ GB free disk, sudo,
 git clone -b containment-eval https://github.com/Naveen4421/real_time_security_using_ebpf.git
 cd real_time_security_using_ebpf
 
-bash eval/setup/00-preflight.sh       # checks hardware, kernel, and that the machine is dedicated
-bash eval/setup/01-install.sh         # Docker, k3s, Helm (about 5 min)
-bash eval/setup/02-build-images.sh    # builds the backend image and loads it into k3s
-bash eval/setup/03-install-stack.sh   # Falco + Falcosidekick + Talon, wired to the collector
+# Each step runs only if the previous one succeeded
+bash eval/setup/00-preflight.sh &&      # checks hardware, kernel, and that the machine is dedicated
+bash eval/setup/01-install.sh &&        # Docker (if missing), k3s, Helm (about 5 min)
+bash eval/setup/02-build-images.sh &&   # builds the backend image and loads it into k3s
+bash eval/setup/03-install-stack.sh &&  # Falco + Falcosidekick + Talon, wired to the collector
+bash eval/setup/04-install-tetragon.sh  # Tetragon: M3, and exact process exit times for every run
 ```
+
+KubeArmor (M4) is installed only for the M4 batch and removed afterwards
+(`bash eval/setup/kubearmor.sh install|uninstall`; `run_phase2.sh` does both). Its admission webhook
+attaches an AppArmor profile to every new pod, and under such a profile Tetragon fails to restart.
+Tetragon's pods carry the `kubearmor-app` label that the webhook skips; Falco Talon's chart cannot
+set it.
 
 ### 1. Smoke test (about 5 minutes)
 
@@ -97,15 +115,58 @@ eval/results/<session>/
 
 - `L_detect_s`: attack start to the first Falco alert reaching the collector.
 - `alert_pipeline_s`: Falco's kernel event time to collector receive time.
-- `L_response_s`: attack start to the response being visible (pod marked for deletion, NetworkPolicy
-  present, or first 403 from RASP). Watcher resolution is about 0.25 to 0.5 s.
-- `steps_completed`: attack steps whose beacon reached the collector. Under `m2` a missing beacon
-  means the step's outbound traffic was blocked, which is what network isolation is meant to do.
+- `L_detect_s`: for `s1` this includes `kubectl exec` start-up (about 0.09 s); report
+  `alert_pipeline_s` (kernel event to alert, about 1 to 2 ms) as Falco's detection latency.
+- `L_response_s`: attack start to the response action completing: Talon's notification for `m1`/`m2`
+  (millisecond precision, collector clock), first HTTP 403 for `m5`.
+- `L_api_visible_s`: attack start to the watcher seeing the change in the Kubernetes API (upper
+  bound, about 0.3 s resolution). The pod being gone from the API does not mean its processes have
+  stopped; use `attack_window_s` and `steps_completed` for what the attacker could still do.
+- `steps_completed`: exec steps whose beacon reached the collector and whose exit code does not say
+  the step was killed or could not run (137, 126, 127), or HTTP steps not blocked (status other than
+  403 or no response; `spawn-shell` returns 500 because `whoami` fails for UID 10001, and the body
+  then says "unknown uid"; a 500 without it means the shell was killed or never started). Under `m2`
+  a missing beacon means the step's outbound traffic was blocked, which is what network isolation
+  is meant to do. Beacons are sent with `node`, not BusyBox `wget`, so M4 cannot silence them.
+- `steps_reached`: exec steps after which the attacker's shell was still alive (beacon received,
+  whatever the exit code). Under `m4` the shell lives on with every step refused.
+- `L_session_end_s` (Tetragon): attack start to the exit of the attacker's `sh -s`, to the
+  nanosecond, or to its kill at start under `m3`. `L_kernel_kill_s`: first `m3` kill.
+  `L_app_killed_s` (HTTP): first exit of the target pod's `node server.js`.
+- `L_block_alert_s` (`m4`): first KubeArmor block alert, read from the relay's stdout.
+- Abuse runs (`s3-abuse-*`, RQ4), over the 300 s trigger period: `terminations` (Talon
+  notifications with status `success`), `restarts_total` (container restarts of the pods left at
+  the end; M3 restarts, M1 deletes), `err_rate_abuse` (failed benign requests), `unavail_s` (1 s
+  bins with under half the benign requests succeeding), `longest_outage_s`, `zero_ready_s` (time
+  the watcher saw no ready backend pod) and `min_ready`. `terminations_skipped` stays 0: in the
+  runs of 10-11 Oct 2026 Talon sent no notification for terminations that `min_healthy_replicas`
+  prevented, so the guard's effect shows as fewer `terminations` than under `m1`.
 - `recompromised`: after the observation window, the first attack step is tried again against a
   live backend pod.
 - `target_logs_available`: whether the original pod's logs can still be read after the response.
 - Talon de-duplicates identical events within 5 s by default (`config.deduplication`); this is left
   at the chart default and should be stated in the paper.
+
+## Risks and cleanup
+
+- Falco runs privileged and sees every process on the PC, including other users' commands. Its alert
+  logs stay on the PC; clear them by uninstalling (below).
+- k3s changes iptables and adds network interfaces (flannel, cni0). This can disturb Docker
+  networking or a VPN until k3s is removed.
+- The collector (port 9999) has no authentication. Anyone on the LAN could send fake events into a
+  results session. Restrict it with the firewall if the lab network is shared.
+- Setup downloads and runs install scripts and images from the internet as root (k3s, Helm, Falco
+  charts). Versions are recorded per session in `session.json`.
+
+Remove everything when finished:
+
+```bash
+bash eval/setup/kubearmor.sh uninstall
+helm uninstall tetragon -n kube-system
+helm uninstall falco falco-talon -n falco
+/usr/local/bin/k3s-uninstall.sh      # removes k3s, its containers, iptables rules and interfaces
+rm -f ~/.kube/config
+```
 
 ## Troubleshooting
 

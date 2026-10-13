@@ -2,7 +2,7 @@
 """Out-of-cluster event collector: the single clock for every timestamp in a run.
 
 Endpoints (all record a receive time `t` in Unix seconds, host clock):
-  GET  /beacon?run=<id>&step=<n>  attack-step beacon sent from inside the target pod
+  GET  /beacon?run=<id>&step=<n>[&rc=<exit code>]  attack-step beacon sent from inside the target pod
   POST /falco                     Falcosidekick webhook output (one Falco alert)
   POST /talon                     Falco Talon webhook notifier (one response action)
   GET  /run?id=<id>               harness marks the current run; alerts are tagged with it
@@ -41,7 +41,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         if url.path == "/beacon":
-            record({"t": t, "type": "beacon", "run": q.get("run"), "step": q.get("step")})
+            record({"t": t, "type": "beacon", "run": q.get("run"), "step": q.get("step"), "rc": q.get("rc")})
         elif url.path == "/run":
             _state["run"] = q.get("id")
             record({"t": t, "type": "run_start"})

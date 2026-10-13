@@ -1,0 +1,11 @@
+# KubeArmor for M4. On the lab PC the enforcer is AppArmor (BPF-LSM is not enabled).
+# Alerts go to the KubeArmor pod's stdout so the harness can read them with kubectl logs;
+# throttling is off so no alert is dropped during a run. Default postures stay "audit",
+# so only the M4 policy blocks anything.
+autoDeploy: true
+kubearmorConfig:
+  defaultCapabilitiesPosture: audit
+  defaultFilePosture: audit
+  defaultNetworkPosture: audit
+  enableStdOutAlerts: true
+  alertThrottling: false

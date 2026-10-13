@@ -15,6 +15,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 EVAL = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(EVAL, "harness"))
+from run import http_step_ran  # noqa: E402  (one definition of a completed HTTP step)
 
 
 def parse_falco_time(s):
@@ -24,7 +26,7 @@ def parse_falco_time(s):
     s = s.rstrip("Z")
     if "." in s:
         head, frac = s.split(".", 1)
-        s = f"{head}.{frac[:6]}"
+        s = f"{head}.{frac[:6].ljust(6, '0')}"  # fromisoformat needs exactly 6 digits
     return datetime.fromisoformat(s).replace(tzinfo=timezone.utc).timestamp()
 
 
@@ -61,8 +63,147 @@ def scenario_steps(name):
     path = os.path.join(EVAL, "scenarios", f"{name}.json")
     if os.path.exists(path):
         with open(path) as f:
-            return len(json.load(f).get("steps", []))
+            sc = json.load(f)
+        return len(sc.get("steps") or sc.get("actions") or [])
     return None
+
+
+BLOCKED_RC = {"126", "127", "137"}  # could not execute / not found / killed (SIGKILL)
+
+
+def read_jsonl(path):
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [json.loads(line) for line in f if line.strip().startswith("{")]
+
+
+def tetragon_metrics(run_dir, meta, t_action):
+    """Exact kernel-side times from Tetragon (only when tetragon.jsonl was saved):
+    L_kernel_kill_s  first process killed by the M3 policy
+    L_session_end_s  exit of the attacker's shell (exec scenario), or its kill at start
+    L_app_killed_s   first exit of the target pod's node server.js (HTTP scenario)"""
+    evs = read_jsonl(os.path.join(run_dir, "tetragon.jsonl"))
+    if not evs:
+        return {}
+    t_end = t_action + meta.get("observe_s", 120)  # the re-compromise probe comes later
+    out = {}
+    kills, execs, exits = [], [], []
+    for e in evs:
+        t = parse_falco_time(e.get("time"))
+        if t is None or not (t_action <= t <= t_end):
+            continue
+        kind = next((k for k in e if k.startswith("process_")), None)
+        body = e[kind]
+        proc = body.get("process", {})
+        pod = (proc.get("pod") or {}).get("name")
+        if kind == "process_kprobe" and body.get("action") == "KPROBE_ACTION_SIGKILL":
+            kills.append(t)
+        elif kind == "process_exec" and pod == meta.get("target_pod"):
+            execs.append((t, proc))
+        elif kind == "process_exit" and pod == meta.get("target_pod"):
+            exits.append((t, proc))
+    if kills:
+        out["L_kernel_kill_s"] = min(kills) - t_action
+    if meta.get("http_steps") is None:
+        session = next((p for t, p in sorted(execs, key=lambda x: x[0]) if p.get("arguments") == "-s"), None)
+        if session:
+            end = [t for t, p in exits if p.get("exec_id") == session.get("exec_id")]
+            if end:
+                out["L_session_end_s"] = min(end) - t_action
+        elif kills:
+            out["L_session_end_s"] = min(kills) - t_action
+    else:
+        # The server is the container's PID 1; spawn-shell forks node children that M3 also kills.
+        app = [t for t, p in exits if p.get("binary", "").endswith("/node")
+               and ((p.get("pod") or {}).get("container") or {}).get("pid") == 1]
+        if app:
+            out["L_app_killed_s"] = min(app) - t_action
+    return out
+
+
+def kubearmor_metrics(run_dir, t_action):
+    """First KubeArmor block alert for the M4 policy (only when kubearmor.jsonl was saved)."""
+    alerts = [a for a in read_jsonl(os.path.join(run_dir, "kubearmor.jsonl"))
+              if a.get("PolicyName") == "eval-m4-block"]
+    times = [t for t in (parse_falco_time(a.get("UpdatedTime")) for a in alerts) if t and t >= t_action]
+    out = {"block_alerts": len(times)} if alerts else {}
+    if times:
+        out["L_block_alert_s"] = min(times) - t_action
+    return out
+
+
+def eventgen_actions(meta, events, run_dir, t_action, alerts):
+    """Attribute Falco alerts and Tetragon kills to each event-generator action (RQ6).
+    The beacon for action i is sent right after it runs, so action i (1-indexed) ran between
+    beacon i-1 (or the attack start) and beacon i. Beacon receive times, Falco evt_time and
+    the kill times are all on the lab-PC host clock. Returns one record per action."""
+    scen_path = os.path.join(EVAL, "scenarios", f"{meta['scenario']}.json")
+    with open(scen_path) as f:
+        acts = json.load(f).get("actions") or []  # full metadata (id, mitre, tactic); run order
+    run = meta["run"]
+    t_end = t_action + meta.get("observe_s", 120)
+    beacons = [e for e in events if e["type"] == "beacon" and e.get("run") == run and e.get("step")]
+    bt = {int(e["step"]): e["t"] for e in beacons}
+    rc = {int(e["step"]): e.get("rc") for e in beacons}
+    kills = []
+    for e in read_jsonl(os.path.join(run_dir, "tetragon.jsonl")):
+        k = next((x for x in e if x.startswith("process_")), None)
+        if k == "process_kprobe" and e[k].get("action") == "KPROBE_ACTION_SIGKILL":
+            tk = parse_falco_time(e.get("time"))
+            if tk is not None:
+                kills.append(tk)
+    at = lambda a: parse_falco_time(a.get("evt_time")) or a["t"]  # noqa: E731 (kernel time, else receive)
+    out = []
+    for i, a in enumerate(acts, 1):
+        lo = bt.get(i - 1, t_action)
+        hi = bt.get(i) or t_end
+        ran = i in bt
+        rules = sorted({al.get("rule") for al in alerts if lo < at(al) <= hi})
+        # Credit a kill to an action only if that action actually ran (its beacon fired).
+        # When the session is killed at shell spawn (M3), no beacon fires and the kill is
+        # reported through steps_reached=0 and L_kernel_kill_s, not as a per-action kill.
+        out.append({"action": a["id"], "mitre": a.get("mitre"), "tactic": a.get("tactic"),
+                    "eval_rule": a.get("detected_by_eval_rules"),
+                    "ran": ran, "rc": rc.get(i), "detected": bool(rules), "rules": rules,
+                    "killed": ran and any(lo < k <= hi for k in kills)})
+    return out
+
+
+def abuse_metrics(meta, actions, run_dir, t_action):
+    """RQ4: what repeated triggering costs normal users, over the trigger period.
+    unavail_s: 1-s bins in which fewer than half of the benign requests succeeded."""
+    with open(os.path.join(EVAL, "scenarios", f"{meta['scenario']}.json")) as f:
+        dur = json.load(f)["duration_s"]
+    out = {"triggers": len(meta["abuse_requests"]),
+           "triggers_answered": sum(1 for r in meta["abuse_requests"] if r["status"] != 0),
+           "terminations": sum(1 for a in actions if (a.get("body") or {}).get("status") == "success"),
+           "terminations_skipped": sum(1 for a in actions if (a.get("body") or {}).get("status") == "ignored"),
+           "restarts_total": meta.get("restarts_total")}
+    load_path = os.path.join(run_dir, "load.csv")
+    if os.path.exists(load_path):
+        with open(load_path) as f:
+            rows = [(float(r["t_send"]), int(r["status"])) for r in csv.DictReader(f)]
+        win = [r for r in rows if t_action <= r[0] < t_action + dur]
+        if win:
+            out["err_rate_abuse"] = sum(1 for r in win if r[1] != 200) / len(win)
+        bins = defaultdict(lambda: [0, 0])
+        for t, status in win:
+            b = bins[int(t - t_action)]
+            b[0] += 1
+            b[1] += status == 200
+        down = [s for s in range(int(dur)) if bins[s][0] and bins[s][1] < bins[s][0] / 2]
+        out["unavail_s"] = len(down)
+        longest = run_len = 0
+        for s in range(int(dur)):
+            run_len = run_len + 1 if s in down else 0
+            longest = max(longest, run_len)
+        out["longest_outage_s"] = longest
+    samples = read_jsonl(os.path.join(run_dir, "pods.jsonl"))
+    samples = [s for s in samples if t_action <= s["t"] <= t_action + dur and "ready" in s]
+    out["zero_ready_s"] = sum(b["t"] - a["t"] for a, b in zip(samples, samples[1:]) if a["ready"] == 0)
+    out["min_ready"] = min((s["ready"] for s in samples), default=None)
+    return out
 
 
 def analyze_run(meta, events, run_dir):
@@ -73,9 +214,11 @@ def analyze_run(meta, events, run_dir):
         row["error"] = meta.get("error")
         return row
 
-    mine = [e for e in events if e.get("run") == run]
-    alerts = sorted((e for e in mine if e["type"] == "alert" and e["t"] >= t_action), key=lambda e: e["t"])
-    actions = sorted((e for e in mine if e["type"] == "action" and e["t"] >= t_action), key=lambda e: e["t"])
+    # Only the observation window: the re-compromise probe afterwards raises its own alerts.
+    t_end = t_action + meta.get("observe_s", 120)
+    mine = [e for e in events if e.get("run") == run and t_action <= e["t"] <= t_end]
+    alerts = sorted((e for e in mine if e["type"] == "alert"), key=lambda e: e["t"])
+    actions = sorted((e for e in mine if e["type"] == "action"), key=lambda e: e["t"])
     row["alerts"] = len(alerts)
     if alerts:
         row["L_detect_s"] = alerts[0]["t"] - t_action
@@ -84,38 +227,78 @@ def analyze_run(meta, events, run_dir):
         row["first_rule"] = alerts[0].get("rule")
     if actions:
         row["L_talon_notify_s"] = actions[0]["t"] - t_action
+    if "abuse_requests" in meta:
+        row.update(abuse_metrics(meta, actions, run_dir, t_action))
+        return row
 
     # Attack progress
     total = scenario_steps(meta["scenario"])
     if "http_steps" in meta:
-        done = [s for s in meta["http_steps"] if s["status"] == 200]
+        # Completed = reached the app and not blocked (see harness http_step_ran).
+        done = [s for s in meta["http_steps"] if http_step_ran(s["status"], s.get("body"))]
         times = [s["t"] for s in done]
         first_t = meta["http_steps"][0]["t"] if meta["http_steps"] else None
         blocked = [s for s in meta["http_steps"] if s["status"] == 403]
         if blocked:
             row["t_rasp_block_s"] = blocked[0]["t"] - t_action
+        refused = [s["t"] for s in meta["http_steps"] if not http_step_ran(s["status"], s.get("body"))]
+        if refused and "body" in meta["http_steps"][0]:
+            row["L_first_blocked_s"] = min(refused) - t_action
+        reached_times = times
     else:
+        # A beacon = the attacker's shell was alive after the step. The step itself took
+        # effect unless its exit code says it was killed or could not run (M3/M4).
         beacons = [e for e in events if e["type"] == "beacon" and e.get("run") == run]
         first_t = min((e["t"] for e in beacons if e["step"] == "0"), default=None)
-        done = {e["step"]: e["t"] for e in beacons if e["step"] not in (None, "0")}
-        times = list(done.values())
-        recheck = [e for e in events if e["type"] == "beacon" and e.get("run") == f"{run}-recheck" and e["step"] == "1"]
+        reached = {e["step"]: e for e in beacons if e["step"] not in (None, "0")}
+        reached_times = [e["t"] for e in reached.values()]
+        times = [e["t"] for e in reached.values() if e.get("rc") not in BLOCKED_RC]
+        row["steps_reached"] = len(reached)
+        refused = [e["t"] for e in reached.values() if e.get("rc") in BLOCKED_RC]
+        if refused:
+            row["L_first_blocked_s"] = min(refused) - t_action
+        recheck = [e for e in events if e["type"] == "beacon" and e.get("run") == f"{run}-recheck"
+                   and e["step"] == "1" and e.get("rc") not in BLOCKED_RC]
         if "recheck_run" in meta:
             row["recompromised"] = bool(recheck)
-    if "recheck_ok" in meta:
-        row["recompromised"] = meta["recheck_ok"]
+    if "recheck_http" in meta:
+        row["recompromised"] = http_step_ran(meta["recheck_http"]["status"], meta["recheck_http"].get("body"))
     row["steps_completed"] = len(times)
     row["steps_total"] = total
-    if times and first_t is not None:
-        row["attack_window_s"] = max(times) - first_t
+    if reached_times and first_t is not None:
+        row["attack_window_s"] = max(reached_times) - first_t
 
-    # Response timing from the pod/NetworkPolicy watcher
+    if meta.get("actions"):  # eventgen (RQ6): per-action detection and kill attribution
+        per = eventgen_actions(meta, events, run_dir, t_action, alerts)
+        row["eventgen_actions"] = per
+        row["actions_total"] = len(per)
+        row["actions_detected"] = sum(1 for a in per if a["detected"])
+        row["actions_killed"] = sum(1 for a in per if a["killed"])
+
+    row.update(tetragon_metrics(run_dir, meta, t_action))
+    row.update(kubearmor_metrics(run_dir, t_action))
+
+    # Response timing. Primary: Talon's own completion notification (collector clock,
+    # ms precision) for m1/m2, first 403 for m5. Secondary: when the watcher saw the
+    # change in the Kubernetes API (upper bound, ~0.3 s resolution).
     tl = meta.get("timeline") or {}
-    resp = tl.get("target_deleting") or tl.get("target_gone") or tl.get("netpol_seen")
-    if meta["mechanism"] == "m5" and "t_rasp_block_s" in row:
-        row["L_response_s"] = row["t_rasp_block_s"]
-    elif resp:
-        row["L_response_s"] = resp - t_action
+    api_seen = tl.get("target_deleting") or tl.get("target_gone") or tl.get("netpol_seen")
+    if api_seen:
+        row["L_api_visible_s"] = api_seen - t_action
+    if meta["mechanism"] == "m5":
+        if "t_rasp_block_s" in row:
+            row["L_response_s"] = row["t_rasp_block_s"]
+    elif meta["mechanism"] == "m3":
+        if "L_kernel_kill_s" in row:
+            row["L_response_s"] = row["L_kernel_kill_s"]
+    elif meta["mechanism"] == "m4":
+        # KubeArmor raises no alert when it refuses /bin/busybox started as /bin/sh, so the
+        # first refused step counts too (an upper bound: the step's report time).
+        cands = [row[k] for k in ("L_block_alert_s", "L_first_blocked_s") if k in row]
+        if cands:
+            row["L_response_s"] = min(cands)
+    elif actions:
+        row["L_response_s"] = actions[0]["t"] - t_action
     if tl.get("new_pod_ready"):
         row["recovery_s"] = tl["new_pod_ready"] - t_action
     row["target_logs_available"] = meta.get("target_logs_available")
@@ -140,8 +323,12 @@ def summarize(rows):
     out = []
     for (mech, scen), rs in sorted(groups.items()):
         s = {"mechanism": mech, "scenario": scen, "n": len(rs)}
-        for key in ("L_detect_s", "L_response_s", "attack_window_s", "steps_completed", "alert_pipeline_s",
-                    "err_rate_response", "p99_ms_response"):
+        for key in ("L_detect_s", "L_response_s", "L_api_visible_s", "attack_window_s", "steps_completed",
+                    "steps_reached", "L_session_end_s", "L_kernel_kill_s", "L_app_killed_s", "L_block_alert_s", "L_first_blocked_s",
+                    "alert_pipeline_s", "err_rate_response", "p99_ms_response", "recovery_s",
+                    "terminations", "terminations_skipped", "restarts_total", "err_rate_abuse", "unavail_s",
+                    "longest_outage_s", "zero_ready_s", "min_ready",
+                    "actions_total", "actions_detected", "actions_killed"):
             vals = [r[key] for r in rs if r.get(key) is not None]
             if vals:
                 lo, hi = bootstrap_ci(vals)
@@ -157,6 +344,37 @@ def summarize(rows):
         s["detection_rate"] = sum(1 for r in rs if r.get("alerts")) / len(rs)
         out.append(s)
     return out
+
+
+def eventgen_summary(session, rows):
+    """Per-(mechanism, action) detection, kill and block rates for the realistic suite (RQ6).
+    Writes eventgen.csv only when a run carried per-action records."""
+    groups = defaultdict(list)
+    for r in rows:
+        for a in (r.get("eventgen_actions") or []):
+            groups[(r["mechanism"], a["action"])].append(a)
+    if not groups:
+        return
+    out = []
+    for (mech, action), recs in sorted(groups.items()):
+        n = len(recs)
+        a0 = recs[0]
+        rules = sorted({x for a in recs for x in a["rules"]})
+        out.append({"mechanism": mech, "action": action, "mitre": a0["mitre"], "tactic": a0["tactic"],
+                    "n": n, "eval_rule": a0["eval_rule"],
+                    "ran_rate": sum(1 for a in recs if a["ran"]) / n,
+                    "detected_rate": sum(1 for a in recs if a["detected"]) / n,
+                    "killed_rate": sum(1 for a in recs if a["killed"]) / n,
+                    "rules_seen": ";".join(rules)})
+    write_csv(os.path.join(session, "eventgen.csv"), out)
+    detm = defaultdict(lambda: [0, 0])
+    for o in out:
+        d = detm[o["mechanism"]]
+        d[0] += o["detected_rate"] * o["n"]
+        d[1] += o["n"]
+    print("  realistic suite (RQ6) detection coverage per mechanism:")
+    for mech, (det, tot) in sorted(detm.items()):
+        print(f"    {mech}: {det / tot:.0%} of action-runs raised a Falco alert")
 
 
 def write_csv(path, rows):
@@ -185,6 +403,9 @@ def main():
         if os.path.exists(meta_path):
             with open(meta_path) as f:
                 rows.append(analyze_run(json.load(f), events, os.path.join(runs_dir, name)))
+    eventgen_summary(session, rows)  # uses the per-action records before they are dropped
+    for r in rows:
+        r.pop("eventgen_actions", None)  # a list; kept out of the flat runs.csv
     write_csv(os.path.join(session, "runs.csv"), rows)
     summary = summarize(rows)
     write_csv(os.path.join(session, "summary.csv"), summary)
