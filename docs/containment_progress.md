@@ -12,7 +12,7 @@ The original IEEE manuscript was judged not ready for a Q2 journal: it reported 
 
 Headline results: Kubernetes pod termination acts within 0.02 to 0.1 s, yet the attacker keeps running until 2.11 s, re-compromises the replacement pod in every run, and the evidence is lost every time. Tetragon's in-kernel kill stops the attacker within 0.09 s and keeps the evidence, but it is the easiest response to abuse: one trigger request every 10 s kept the service down 75% of the time.
 
-Overhead: at 2,500 requests per second Tetragon added under 0.1 ms to p99 latency and Falco with Talon 0.27 ms, while KubeArmor with default visibility used 1.2 extra cores and nearly tripled p99 latency. Still to do (about 2 weeks): realistic attacks, then the rewrite and submission.
+Overhead: at 2,500 requests per second Tetragon added under 0.1 ms to p99 latency and Falco with Talon 0.27 ms, while KubeArmor with default visibility used 1.2 extra cores and nearly tripled p99 latency. Realistic attacks: an established public suite (Falco event-generator, mapped to MITRE ATT&CK) confirmed the mechanism behaviour, Tetragon killing the attacker's shell on spawn before any action ran. All measurements are now complete; what remains is the rewrite and submission (about 2 weeks).
 
 ## Why we changed direction
 
@@ -197,6 +197,20 @@ Each of five stacks was switched on in turn, 10 times in random order, with the 
 
 No stack caused request errors. The 11 MB under no tools is Tetragon's operator, a small helper that stays running when the agent is off. At 500 requests per second the no-tools baseline was slower than the stacks with agents running, most likely because the nearly idle CPU drops to a lower speed; that level is left out of the comparison.
 
+### Realistic attacks (RQ6, 11 Oct)
+
+To answer the reviewer point that our attacks were self-written (P0-2), we ran an established public attack suite instead: 13 Falco event-generator `syscall` actions, each tagged with a MITRE ATT&CK for Containers technique, covering credential access, execution, defense evasion, discovery and privilege escalation. They run inside the target container as its non-root user. 100 runs, none failed.
+
+| Mechanism | Actions that ran (of 13) | Falco detected | Containment | First response |
+| --- | --- | --- | --- | --- |
+| m0 detect only | 13 | 100% | none | alert 0.51 s |
+| m1 Talon terminate | about 1 | yes | pod deleted; attacker got ~1 action in | 0.52 s |
+| m3 Tetragon kill | 0 | n/a | shell killed on spawn, before any action | kill 0.50 s |
+| m4 KubeArmor block | 13 | 100% | every sensitive open and exec refused (shell stays alive) | block 0.93 s |
+| m5 in-app RASP | 13 | 100% | none (blind to syscall attacks) | none |
+
+Falco fired real default rules across the suite (fileless/memfd execution, ptrace, symlink and hardlink over sensitive files, credential and private-key searches, /dev/shm execution) plus our two eval rules. The suite confirms the mechanism behaviour seen in the hand-written attacks on an independent, reproducible attack set. Two honest notes: under Tetragon the shell dies so fast that the detection pipeline logs nothing (detection and in-kernel kill trade off), and the per-action detection figure for m1 is inflated by time-window attribution, so the reliable figures are the session-level ones.
+
 ## Key findings
 
 No single response wins on every measure, which supports recommending a layered response in the paper.
@@ -209,12 +223,13 @@ No single response wins on every measure, which supports recommending a layered 
 6. **RASP only delays the attacker,** who gets back in once its 30 s lockdown ends.
 7. **The fastest response is the easiest to abuse.** Under Tetragon, an outside attacker repeating one public request every 10 s kept the service down 225 of 300 s: every trigger kills the server and Kubernetes' restart delay keeps growing. Pod termination stayed available up to 30 triggers per minute and lost 14 s at 120 per minute, and Talon's replica guard removed that outage.
 8. **Overhead ranks differently from protection.** Tetragon, the strongest responder, was also the cheapest to run (within noise); Falco with Talon cost about 0.16 cores and 0.27 ms of p99 latency at 2,500 requests per second, and KubeArmor with default visibility about 1.2 cores and 1.4 ms.
+9. **An established attack suite gives the same ranking.** The MITRE-tagged event-generator suite reproduced the hand-written results: Tetragon contained earliest (before any of 13 actions ran), KubeArmor refused each action but left the shell alive, Talon let about one action through, and in-app RASP missed the syscall-level attacks entirely.
 
 ## Limitations
 
-These limits must be stated in the paper; the first will be reduced by the remaining experiment.
+These limits must be stated in the paper.
 
-- **Attack set is our own.** Both attacks are scripts we wrote, and the Falco rules and the Tetragon and KubeArmor policies target exactly those behaviours (reviewer point P0-2). Realistic attacks are next.
+- **Policies still match the attack behaviours.** The hand-written scenarios have been supplemented with an established public suite (event-generator, RQ6), so the attacks are no longer only our own (reviewer point P0-2 addressed). The Tetragon and KubeArmor policies, however, still target the shell-spawn and sensitive-file behaviours that the suite also exercises, so this measures mechanism behaviour, not policy-authoring difficulty.
 - **Inline policies were written to match the attacks.** A real policy that kills or refuses every shell would also break legitimate shell use, which this app does not have.
 - **Overhead covers one light HTTP workload.** The app does little work per request, and the lowest load level (500 requests/s) is confounded by CPU power saving; KubeArmor was measured only with its default visibility.
 - **Single node, shared lab PC.** One unrelated container ran throughout; multi-node behaviour is untested (P1-2).
@@ -222,9 +237,9 @@ These limits must be stated in the paper; the first will be reduced by the remai
 - **Phase 1 timing was coarse.** Its steps ran 1 s apart; phase 2 replaced the attacker's stop time with Tetragon's exact process exit time.
 - **Zero false positives is expected** from two narrowly scoped rules and says little about real workloads.
 
-## Next experiments
+## Experiments: complete
 
-All planned measurements are done except realistic attacks, which is the last experiment before the results can be written up.
+All planned measurements are done. What remains is writing up the results and submitting.
 
 | Priority | Experiment | Status | Why it matters |
 | --- | --- | --- | --- |
@@ -232,8 +247,9 @@ All planned measurements are done except realistic attacks, which is the last ex
 | 2 | Exact process-exit times | Done 10 Oct, from Tetragon | Makes the 2 s gap precise and shows its cause |
 | 3 | Attacker abuse (RQ4) | Done 11 Oct, 60 runs | Not found in published work |
 | 4 | Overhead (RQ5): 5 stacks, idle and 3 load levels, 10 repetitions | Done 11 Oct, 200 windows | Every reviewer asks for it; P0-1 |
-| 5 | Realistic attacks: Falco event-generator and Atomic Red Team container tests, mapped to MITRE ATT&CK | Next, about 2 days | Replaces self-written scripts; P0-2 |
-| 6 | CI cost: Trivy build time and findings per image | Open, half a day | Scenario S1 in the manuscript |
+| 5 | Realistic attacks: Falco event-generator, mapped to MITRE ATT&CK | Done 11 Oct, 100 runs | Established public attacks instead of self-written scripts; P0-2 |
+
+Dropped from scope (future work, not needed for the containment argument): CI cost (Trivy build time and findings per image), and Atomic Red Team, whose container techniques largely do not apply to this Alpine workload.
 
 ## Writing and submission
 
@@ -261,7 +277,7 @@ The writing can start now in parallel with the experiments; reviewer point codes
 
 **Draft abstract (updated 11 Oct, all results in)**
 
-Automated response to runtime threats is usually judged by detection, but its value depends on what happens after the alert. We measure five automated containment mechanisms in Kubernetes against a detect-only baseline and the same two scripted attacks: pod termination and network isolation through Falco Talon, in-kernel process termination with Tetragon, LSM-based blocking with KubeArmor, and in-application self-protection, with Falco's modern eBPF driver as the common detector. On a single-node k3s testbed, each applicable mechanism and attack pair ran 20 times with fresh pods under steady benign load, with all events timed on one clock and no runs discarded. Falco alerted about 2 ms after the kernel event whenever the attack executed. Pod termination acted within 0.02 to 0.1 s, yet the attacker kept running until 2.1 s, re-compromised the replacement pod in every run, and the attacked pod's logs were lost every time. Network isolation did nothing against an inbound attack. In-kernel termination stopped the attacker within 0.09 s with no step completed and the evidence kept, while LSM blocking on an Alpine image could not block a shell without blocking every BusyBox tool and refused shells without raising an alert. The fastest response was also the easiest to abuse: an outside attacker sending one trigger request every 10 s kept the service unavailable 75% of the time under in-kernel termination, while pod termination stayed available up to 30 triggers per minute and a replica guard removed its outage at 120. At 2,500 requests per second, Tetragon added under 0.1 ms to p99 latency and Falco with Talon 0.27 ms, while KubeArmor with default visibility used 1.2 extra cores and nearly tripled p99 latency. No mechanism wins on speed, durability, evidence, abuse and cost together, which argues for a layered response. Configurations, scripts and raw run data are released.
+Automated response to runtime threats is usually judged by detection, but its value depends on what happens after the alert. We measure five automated containment mechanisms in Kubernetes against a detect-only baseline and the same two scripted attacks: pod termination and network isolation through Falco Talon, in-kernel process termination with Tetragon, LSM-based blocking with KubeArmor, and in-application self-protection, with Falco's modern eBPF driver as the common detector. On a single-node k3s testbed, each applicable mechanism and attack pair ran 20 times with fresh pods under steady benign load, with all events timed on one clock and no runs discarded. Falco alerted about 2 ms after the kernel event whenever the attack executed. Pod termination acted within 0.02 to 0.1 s, yet the attacker kept running until 2.1 s, re-compromised the replacement pod in every run, and the attacked pod's logs were lost every time. Network isolation did nothing against an inbound attack. In-kernel termination stopped the attacker within 0.09 s with no step completed and the evidence kept, while LSM blocking on an Alpine image could not block a shell without blocking every BusyBox tool and refused shells without raising an alert. The fastest response was also the easiest to abuse: an outside attacker sending one trigger request every 10 s kept the service unavailable 75% of the time under in-kernel termination, while pod termination stayed available up to 30 triggers per minute and a replica guard removed its outage at 120. At 2,500 requests per second, Tetragon added under 0.1 ms to p99 latency and Falco with Talon 0.27 ms, while KubeArmor with default visibility used 1.2 extra cores and nearly tripled p99 latency. An established public attack suite (Falco event-generator, mapped to MITRE ATT&CK) reproduced this ranking: in-kernel termination contained the attacker before any of thirteen techniques ran, while in-application protection was blind to the syscall-level attacks entirely. No mechanism wins on speed, durability, evidence, abuse and cost together, which argues for a layered response. Configurations, scripts and raw run data are released.
 
 ## Timeline and owners
 
@@ -269,7 +285,7 @@ Automated response to runtime threats is usually judged by detection, but its va
 
 *plan · 4 weeks, 2 lanes, 1 gate*
 
-Status on 11 October: the week 1 and week 2 experiments (in-kernel mechanisms, exact exit times, abuse and overhead) are done; only realistic attacks remain, so experiments are about a week ahead of this plan. Owners are not assigned yet: the team should name one person for the lab PC runs and a lead author for each paper section.
+Status on 11 October: all experiments (in-kernel mechanisms, exact exit times, abuse, overhead and realistic attacks) are complete, so the measurement phase is finished about a week ahead of this plan. The remaining work is writing. Owners are not assigned yet: the team should name a lead author for each paper section.
 
 ## Housekeeping and open decisions
 
