@@ -28,3 +28,12 @@ eval/results/
 eval/stack/charts/
 # Attack tooling binary (large; rebuild with eval/setup/05-build-eventgen.sh)
 eval/attack/
+
+# LaTeX build artifacts / generated manuscript binaries
+*.aux
+*.bbl
+*.blg
+*.out
+*.synctex.gz
+*.docx
+*.zip

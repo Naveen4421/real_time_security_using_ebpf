@@ -35,13 +35,13 @@ abuse, and running cost. This repository measures those trade-offs.
 
 ## What the measurements show
 
-580 attack and abuse runs plus 200 overhead windows, none discarded. The central
+460 attack and abuse runs plus 200 overhead windows, none discarded. The central
 result: **no mechanism wins on speed, durability, evidence, abuse-resistance, and
 cost together, which argues for a layered response chosen per workload.**
 
 | Experiment | Runs | One-line result |
 |---|---|---|
-| Detection + containment (s1, s2) | ~320 | Falco alerts in ~2 ms; M1 returns from the API in 0.02-0.10 s but the attacker's process lives ~2 s and re-compromises the replacement pod every time; M3 kills the shell in 0.09 s with no step completed; M4 refuses every command but the shell stays alive |
+| Detection + containment (s1, s2) | 300 | Falco alerts in ~2 ms; M1 returns from the API in 0.02-0.10 s but the attacker's process lives ~2 s and re-compromises the replacement pod every time; M3 kills the shell in 0.09 s with no step completed; M4 refuses every command but the shell stays alive |
 | Abuse of the response (RQ4) | 60 | At 6 triggers/min, in-kernel termination (M3) kept the service unavailable 225 of 300 s; the M1g replica guard removes the outage entirely (0 s down) |
 | Steady-state overhead (RQ5) | 200 windows | At 2,500 req/s, Tetragon adds under 0.1 ms p99; KubeArmor at default visibility uses about 1.2 extra cores |
 | Realistic attacks (RQ6) | 100 | 13 MITRE ATT&CK-tagged actions from Falco's `event-generator`: M3 kills the shell on spawn before any technique runs; M5 is blind to syscall-level attacks |
